@@ -77,7 +77,8 @@ const (
 )
 
 type SMTPConfig struct {
-	Host     string `toml:"host"`
+	Host string `toml:"host"`
+	// ID is the user to act on behalf of, if not the authenticated user. Should normally be empty.
 	ID       string `toml:"id"`
 	User     string `toml:"user"`
 	Password string `toml:"pass"`
