@@ -44,10 +44,8 @@ type Status struct {
 	Addr string
 	// Timestamp of the last sync to this server.
 	LastSync time.Time
-	// Timestamp of the last sync failure.
-	LastFail time.Time
 	// Error message of last sync failure.
-	LastError error
+	LastError string
 }
 
 type Config struct {
@@ -69,11 +67,13 @@ type SMTPConfig struct {
 
 // Storage implements a simple interface to persist the status of multiple PKS peers.
 // All methods are prefixed by `PKS` so that a concrete storage class can implement multiple Storage interfaces.
-// NB: PKSInit() MUST set Status[i].LastSync := Time.Now() to prevent an update storm on startup.
+// NB: PKSInit() MUST be called with lastSync == time.Now() to prevent an update storm on startup.
 type Storage interface {
-	PKSInit(addr string) error     // Initialise a new PKS peer
-	PKSAll() ([]Status, error)     // Return the status of all PKS peers
-	PKSUpdate(status Status) error // Update the status of one PKS peer
+	PKSInit(addr string, lastSync time.Time) error // Initialise a new PKS peer
+	PKSAll() ([]Status, error)                     // Return the status of all PKS peers
+	PKSUpdate(status Status) error                 // Update the status of one PKS peer
+	PKSRemove(addr string) error                   // Remove one PKS peer
+	PKSGet(addr string) error                      // Return the status of one PKS peer
 }
 
 // Basic implementation of outbound PKS synchronization
@@ -121,7 +121,7 @@ func NewSender(hkpStorage storage.Storage, pksStorage Storage, config *Config) (
 
 func (sender *Sender) initStatus() error {
 	for _, addr := range sender.config.To {
-		err := sender.pksStorage.PKSInit(addr)
+		err := sender.pksStorage.PKSInit(addr, time.Now())
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -143,13 +143,12 @@ func (sender *Sender) SendKeys(status Status) error {
 		// Send key email
 		log.Debugf("sending key %q to PKS %s", key.PrimaryKey.Fingerprint(), status.Addr)
 		err = sender.SendKey(status.Addr, key.PrimaryKey)
+		status.LastError = err.Error()
 		if err != nil {
 			log.Errorf("error sending key to PKS %s: %v", status.Addr, err)
-			status.LastFail = time.Now()
-			status.LastError = err
-			err2 := sender.pksStorage.PKSUpdate(status)
-			if err2 != nil {
-				return errors.WithStack(err2)
+			storageErr := sender.pksStorage.PKSUpdate(status)
+			if storageErr != nil {
+				return errors.WithStack(storageErr)
 			}
 			return errors.WithStack(err)
 		}

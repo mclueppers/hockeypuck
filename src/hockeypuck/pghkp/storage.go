@@ -33,10 +33,12 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/exp/slices"
 
-	log "github.com/sirupsen/logrus"
 	"hockeypuck/hkp/jsonhkp"
+	pks "hockeypuck/hkp/pks"
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -68,6 +70,12 @@ rfingerprint TEXT NOT NULL,
 rsubfp TEXT NOT NULL PRIMARY KEY,
 FOREIGN KEY (rfingerprint) REFERENCES keys(rfingerprint)
 )
+`,
+	`CREATE TABLE IF NOT EXISTS pks_status (
+	addr TEXT NOT NULL PRIMARY KEY,
+	last_sync TIMESTAMP WITH TIME ZONE,
+	last_error TEXT
+	)
 `,
 }
 
@@ -1475,4 +1483,102 @@ func (st *storage) BulkNotify(sqlStr string) error {
 
 func (st *storage) RenotifyAll() error {
 	return st.BulkNotify("SELECT md5 FROM keys")
+}
+
+//
+// pks.Storage implementation
+//
+
+// Initialise a new PKS peer record if it does not already exist.
+func (st *storage) PKSInit(addr string, lastSync time.Time) error {
+	stmt, err := st.Prepare("INSERT INTO pks_status ( addr, last_sync, last_error ) VALUES ( $1, $2, $3 ) ON CONFLICT DO NOTHING")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = stmt.Exec(addr, lastSync, "")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+// Return the status of all PKS peers.
+func (st *storage) PKSAll() ([]pks.Status, error) {
+	rows, err := st.Query("SELECT addr, last_sync, last_error FROM pks_status")
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	var result []pks.Status
+	defer rows.Close()
+	for rows.Next() {
+		var addr, lastError string
+		var lastSync time.Time
+		err = rows.Scan(&addr, &lastSync, &lastError)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, errors.WithStack(err)
+		}
+		result = append(result, pks.Status{
+			Addr:      addr,
+			LastSync:  lastSync,
+			LastError: lastError,
+		})
+	}
+	return result, nil
+}
+
+// Get one PKS peer.
+func (st *storage) PKSGet(addr string) (*pks.Status, error) {
+	stmt, err := st.Prepare("SELECT addr, last_sync, last_error FROM pks_status WHERE addr = $1")
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	rows, err := stmt.Query(addr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	var result *pks.Status
+	defer rows.Close()
+	for rows.Next() {
+		var addr, lastError string
+		var lastSync time.Time
+		err = rows.Scan(&addr, &lastSync, &lastError)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, errors.WithStack(err)
+		}
+		result = &pks.Status{
+			Addr:      addr,
+			LastSync:  lastSync,
+			LastError: lastError,
+		}
+		break
+	}
+	return result, nil
+}
+
+// Update the status of one PKS peer.
+func (st *storage) PKSUpdate(status pks.Status) error {
+	stmt, err := st.Prepare("UPDATE pks_status SET last_sync = $2, last_error = $3 WHERE addr = $1")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = stmt.Exec(status.Addr, status.LastSync, status.LastError)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+// Remove a PKS peer.
+func (st *storage) PKSRemove(addr string) error {
+	stmt, err := st.Prepare("DELETE FROM pks_status WHERE addr = $1")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = stmt.Exec(&addr)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
 }

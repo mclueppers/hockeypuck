@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	stdtesting "testing"
+	"time"
 
 	"hockeypuck/pgtest"
 	"hockeypuck/testing"
@@ -36,6 +37,7 @@ import (
 
 	"hockeypuck/hkp"
 	"hockeypuck/hkp/jsonhkp"
+	"hockeypuck/hkp/pks"
 	"hockeypuck/openpgp"
 )
 
@@ -576,4 +578,52 @@ func (s *S) TestAddBareRevocation(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 	c.Assert(addRes.Inserted, gc.HasLen, 0)
 	c.Assert(addRes.Updated, gc.HasLen, 1)
+}
+
+func (s *S) TestPKS(c *gc.C) {
+	testAddr := "test@example.com"
+	now := time.Now()
+	testError := "unknown error"
+	testStatus := pks.Status{Addr: testAddr, LastSync: now, LastError: testError}
+
+	err := s.storage.PKSInit(testAddr, now)
+	c.Assert(err, gc.IsNil)
+	statuses, err := s.storage.PKSAll()
+	c.Assert(err, gc.IsNil)
+	c.Assert(statuses, gc.HasLen, 1)
+	status := &statuses[0]
+	c.Assert(status.Addr, gc.Equals, testAddr)
+	c.Assert(status.LastSync.UTC(), gc.Equals, now.UTC().Truncate(time.Microsecond))
+	c.Assert(status.LastError, gc.Equals, "")
+
+	// PKSUpdate should populate LastError
+	err = s.storage.PKSUpdate(testStatus)
+	c.Assert(err, gc.IsNil)
+	status, err = s.storage.PKSGet(testAddr)
+	c.Assert(err, gc.IsNil)
+	c.Assert(status.LastError, gc.Equals, testError)
+
+	// PKSInit should not update
+	next := now.Add(time.Second)
+	err = s.storage.PKSInit(testAddr, next)
+	c.Assert(err, gc.IsNil)
+	status, err = s.storage.PKSGet(testAddr)
+	c.Assert(err, gc.IsNil)
+	c.Assert(status.LastSync.UTC(), gc.Equals, now.UTC().Truncate(time.Microsecond))
+	c.Assert(status.LastError, gc.Equals, testError)
+
+	testStatus2 := pks.Status{Addr: testAddr, LastSync: next, LastError: ""}
+	err = s.storage.PKSUpdate(testStatus2)
+	c.Assert(err, gc.IsNil)
+	status, err = s.storage.PKSGet(testAddr)
+	c.Assert(err, gc.IsNil)
+	c.Assert(status.Addr, gc.Equals, testAddr)
+	c.Assert(status.LastSync.UTC(), gc.Equals, next.UTC().Truncate(time.Microsecond))
+	c.Assert(status.LastError, gc.Equals, "")
+
+	err = s.storage.PKSRemove(testAddr)
+	c.Assert(err, gc.IsNil)
+	statuses, err = s.storage.PKSAll()
+	c.Assert(err, gc.IsNil)
+	c.Assert(statuses, gc.HasLen, 0)
 }
