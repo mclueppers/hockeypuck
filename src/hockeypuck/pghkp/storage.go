@@ -356,7 +356,7 @@ type keyDoc struct {
 	MTime        time.Time
 	MD5          string
 	Doc          string
-	Keywords     []string
+	Keywords     string
 }
 
 func (st *storage) MatchMD5(md5s []string) ([]string, error) {
@@ -1548,7 +1548,15 @@ func (st *storage) reindexBunch(bookmark time.Time) (time.Time, error) {
 
 			// TODO:
 			// Populate Fingerprint, KeyID if empty (issue #285)
+
 			// Regenerate keywords
+			keywords := keywordsTSVector(&pk)
+			// Note that the TSVector is NOT stable re sort ordering of UserIDs
+			// And this comparison probably won't work anyway...
+			if doc.Keywords != keywords {
+				doc.Keywords = keywords
+				changed = true
+			}
 
 			if !changed {
 				break
@@ -1562,6 +1570,7 @@ func (st *storage) reindexBunch(bookmark time.Time) (time.Time, error) {
 		}
 	}
 	// TODO: Bulk update using keyDocs
+	// If any updates fail, assume it's due to a simultaneous update and ignore gracefully
 
 	return newBookmark, nil
 }
