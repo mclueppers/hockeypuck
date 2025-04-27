@@ -37,7 +37,7 @@ import (
 
 	"hockeypuck/hkp"
 	"hockeypuck/hkp/jsonhkp"
-	"hockeypuck/hkp/pks"
+	pksstorage "hockeypuck/hkp/pks/storage"
 	"hockeypuck/openpgp"
 )
 
@@ -581,10 +581,10 @@ func (s *S) TestAddBareRevocation(c *gc.C) {
 }
 
 func (s *S) TestPKS(c *gc.C) {
-	testAddr := "test@example.com"
+	testAddr := "mailto:test@example.com"
 	now := time.Now()
 	testError := "unknown error"
-	testStatus := pks.Status{Addr: testAddr, LastSync: now, LastError: testError}
+	testStatus := pksstorage.Status{Addr: testAddr, LastSync: now, LastError: testError}
 
 	err := s.storage.PKSInit(testAddr, now)
 	c.Assert(err, gc.IsNil)
@@ -612,7 +612,7 @@ func (s *S) TestPKS(c *gc.C) {
 	c.Assert(status.LastSync.UTC(), gc.Equals, now.UTC().Truncate(time.Microsecond))
 	c.Assert(status.LastError, gc.Equals, testError)
 
-	testStatus2 := pks.Status{Addr: testAddr, LastSync: next, LastError: ""}
+	testStatus2 := pksstorage.Status{Addr: testAddr, LastSync: next, LastError: ""}
 	err = s.storage.PKSUpdate(testStatus2)
 	c.Assert(err, gc.IsNil)
 	status, err = s.storage.PKSGet(testAddr)

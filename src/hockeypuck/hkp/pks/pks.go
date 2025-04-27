@@ -19,8 +19,12 @@ package pks
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"net"
+	"net/http"
 	"net/smtp"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -32,21 +36,12 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"hockeypuck/hkp/storage"
+	"hockeypuck/hkp/pks/storage"
+	hkpstorage "hockeypuck/hkp/storage"
 )
 
 // Max delay backoff multiplier when there are SMTP errors.
 const maxDelay = 60
-
-// Status of PKS synchronization
-type Status struct {
-	// Address of the PKS server.
-	Addr string
-	// Timestamp of the last sync to this server.
-	LastSync time.Time
-	// Error message of last sync failure.
-	LastError string
-}
 
 type Config struct {
 	From string     `toml:"from"`
@@ -65,37 +60,30 @@ type SMTPConfig struct {
 	Password string `toml:"pass"`
 }
 
-// Storage implements a simple interface to persist the status of multiple PKS peers.
-// All methods are prefixed by `PKS` so that a concrete storage class can implement multiple Storage interfaces.
-// NB: PKSInit() MUST be called with lastSync == time.Now() to prevent an update storm on startup.
-type Storage interface {
-	PKSInit(addr string, lastSync time.Time) error // Initialise a new PKS peer
-	PKSAll() ([]Status, error)                     // Return the status of all PKS peers
-	PKSUpdate(status Status) error                 // Update the status of one PKS peer
-	PKSRemove(addr string) error                   // Remove one PKS peer
-	PKSGet(addr string) error                      // Return the status of one PKS peer
+type VKSRequest struct {
+	Keytext string `json:"keytext"`
 }
 
 // Basic implementation of outbound PKS synchronization
 type Sender struct {
+	hkpStorage hkpstorage.Storage
+	storage    storage.Storage
 	config     *Config
-	hkpStorage storage.Storage
-	pksStorage Storage
 	smtpAuth   smtp.Auth
 
 	t tomb.Tomb
 }
 
 // Initialize from command line switches if fields not set.
-func NewSender(hkpStorage storage.Storage, pksStorage Storage, config *Config) (*Sender, error) {
+func NewSender(hkpStorage hkpstorage.Storage, Storage storage.Storage, config *Config) (*Sender, error) {
 	if config == nil {
 		return nil, errors.New("PKS synchronization not configured")
 	}
 
 	sender := &Sender{
-		config:     config,
 		hkpStorage: hkpStorage,
-		pksStorage: pksStorage,
+		storage:    Storage,
+		config:     config,
 	}
 
 	var err error
@@ -121,7 +109,7 @@ func NewSender(hkpStorage storage.Storage, pksStorage Storage, config *Config) (
 
 func (sender *Sender) initStatus() error {
 	for _, addr := range sender.config.To {
-		err := sender.pksStorage.PKSInit(addr, time.Now())
+		err := sender.storage.PKSInit(addr, time.Now())
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -129,7 +117,7 @@ func (sender *Sender) initStatus() error {
 	return nil
 }
 
-func (sender *Sender) SendKeys(status Status) error {
+func (sender *Sender) SendKeys(status storage.Status) error {
 	uuids, err := sender.hkpStorage.ModifiedSince(status.LastSync)
 	if err != nil {
 		return errors.WithStack(err)
@@ -146,7 +134,7 @@ func (sender *Sender) SendKeys(status Status) error {
 		status.LastError = err.Error()
 		if err != nil {
 			log.Errorf("error sending key to PKS %s: %v", status.Addr, err)
-			storageErr := sender.pksStorage.PKSUpdate(status)
+			storageErr := sender.storage.PKSUpdate(&status)
 			if storageErr != nil {
 				return errors.WithStack(storageErr)
 			}
@@ -154,7 +142,7 @@ func (sender *Sender) SendKeys(status Status) error {
 		}
 		// Send successful, update the timestamp accordingly
 		status.LastSync = key.MTime
-		err = sender.pksStorage.PKSUpdate(status)
+		err = sender.storage.PKSUpdate(&status)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -165,14 +153,64 @@ func (sender *Sender) SendKeys(status Status) error {
 // Send an updated public key to a PKS server.
 func (sender *Sender) SendKey(addr string, key *openpgp.PrimaryKey) error {
 	var msg bytes.Buffer
-	emailMatch := regexp.MustCompile("^(mailto:)?([^@]+@[^@]+)$")
+	var err error
+	emailMatch := regexp.MustCompile(`^mailto:([^@]+@[^@]+)$`)
 	matches := emailMatch.FindStringSubmatch(addr)
-	if matches != nil && matches[2] != "" {
-		emailAddr := matches[2]
-		msg.WriteString("Subject: ADD\n\n")
-		openpgp.WriteArmoredPackets(&msg, []*openpgp.PrimaryKey{key})
+	if matches != nil && matches[1] != "" {
+		emailAddr := matches[1]
+		_, err = msg.WriteString("Subject: ADD\n\n")
+		if err != nil {
+			return err
+		}
+		err = openpgp.WriteArmoredPackets(&msg, []*openpgp.PrimaryKey{key})
+		if err != nil {
+			return err
+		}
 		return smtp.SendMail(sender.config.SMTP.Host, sender.smtpAuth,
 			sender.config.From, []string{emailAddr}, msg.Bytes())
+	}
+	urlMatch := regexp.MustCompile(`^(hkps?|vks)://(([^:]+)|\[([0-9A-Fa-f:]+)\])(:(\d+))?$`)
+	matches = urlMatch.FindStringSubmatch(addr)
+	if matches != nil && matches[3] != "" {
+		pksProtocol := matches[1]
+		host := matches[3]
+		port := "443"
+		httpProtocol := "https"
+		path := "pks/add"
+		if pksProtocol == "hkp" {
+			httpProtocol = "http"
+			port = "11371"
+		} else if pksProtocol == "vks" {
+			path = "vks/v1/upload"
+		}
+		if matches[5] != "" {
+			port = matches[5]
+		}
+		pksUrl := fmt.Sprintf("%s://%s:%s/%s", httpProtocol, host, port, path)
+
+		err = openpgp.WriteArmoredPackets(&msg, []*openpgp.PrimaryKey{key})
+		if err != nil {
+			return err
+		}
+		var resp *http.Response
+		if pksProtocol == "vks" {
+			var vksJson []byte
+			vksJson, err = json.Marshal(VKSRequest{Keytext: msg.String()})
+			if err != nil {
+				return err
+			}
+			resp, err = http.Post(pksUrl, "application/json", bytes.NewBuffer(vksJson))
+		} else {
+			resp, err = http.PostForm(pksUrl, url.Values{"keytext": {msg.String()}})
+		}
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return errors.Errorf("Status code %d when sending key to '%s'", resp.StatusCode, pksUrl)
+		}
+		return nil
 	}
 	return errors.Errorf("PKS address '%s' not supported", addr)
 }
@@ -188,13 +226,13 @@ func (sender *Sender) run() error {
 		case <-timer.C:
 		}
 
-		statuses, err := sender.pksStorage.PKSAll()
+		statuses, err := sender.storage.PKSAll()
 		if err != nil {
 			log.Errorf("failed to obtain PKS sync status: %v", err)
 			goto DELAY
 		}
 		for _, status := range statuses {
-			err = sender.SendKeys(status)
+			err = sender.SendKeys(*status)
 			if err != nil {
 				// Increase delay backoff
 				delay++
@@ -219,8 +257,8 @@ func (sender *Sender) run() error {
 }
 
 // Report status of all PKS peers
-func (sender *Sender) Status() ([]Status, error) {
-	statuses, err := sender.pksStorage.PKSAll()
+func (sender *Sender) Status() ([]*storage.Status, error) {
+	statuses, err := sender.storage.PKSAll()
 	if err != nil {
 		return nil, errors.Errorf("failed to obtain PKS sync status: %v", err)
 	}
