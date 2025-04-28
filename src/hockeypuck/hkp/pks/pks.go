@@ -117,7 +117,7 @@ func (sender *Sender) initStatus() error {
 	return nil
 }
 
-func (sender *Sender) SendKeys(status storage.Status) error {
+func (sender *Sender) SendKeys(status *storage.Status) error {
 	uuids, err := sender.hkpStorage.ModifiedSince(status.LastSync)
 	if err != nil {
 		return errors.WithStack(err)
@@ -134,7 +134,7 @@ func (sender *Sender) SendKeys(status storage.Status) error {
 		status.LastError = err.Error()
 		if err != nil {
 			log.Errorf("error sending key to PKS %s: %v", status.Addr, err)
-			storageErr := sender.storage.PKSUpdate(&status)
+			storageErr := sender.storage.PKSUpdate(status)
 			if storageErr != nil {
 				return errors.WithStack(storageErr)
 			}
@@ -142,7 +142,7 @@ func (sender *Sender) SendKeys(status storage.Status) error {
 		}
 		// Send successful, update the timestamp accordingly
 		status.LastSync = key.MTime
-		err = sender.storage.PKSUpdate(&status)
+		err = sender.storage.PKSUpdate(status)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -183,8 +183,8 @@ func (sender *Sender) SendKey(addr string, key *openpgp.PrimaryKey) error {
 		} else if pksProtocol == "vks" {
 			path = "vks/v1/upload"
 		}
-		if matches[5] != "" {
-			port = matches[5]
+		if matches[6] != "" {
+			port = matches[6]
 		}
 		pksUrl := fmt.Sprintf("%s://%s:%s/%s", httpProtocol, host, port, path)
 
@@ -232,7 +232,7 @@ func (sender *Sender) run() error {
 			goto DELAY
 		}
 		for _, status := range statuses {
-			err = sender.SendKeys(*status)
+			err = sender.SendKeys(status)
 			if err != nil {
 				// Increase delay backoff
 				delay++
@@ -241,7 +241,7 @@ func (sender *Sender) run() error {
 				}
 				break
 			} else {
-				// Successful mail sent, reset delay
+				// Success, reset delay
 				delay = 1
 			}
 		}

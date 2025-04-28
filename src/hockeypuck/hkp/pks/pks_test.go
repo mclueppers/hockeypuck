@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/pkg/errors"
 	gc "gopkg.in/check.v1"
 
 	"hockeypuck/hkp"
 	"hockeypuck/hkp/pks/storage"
+	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/hkp/storage/mock"
 	"hockeypuck/openpgp"
 	"hockeypuck/testing"
@@ -68,6 +70,8 @@ var (
 	peers = []string{testPeer1.addr, testPeer2.addr, testPeer3.addr}
 )
 
+var statuses []*storage.Status
+
 func Test(t *stdtesting.T) { gc.TestingT(t) }
 
 type PksSuite struct {
@@ -81,21 +85,42 @@ var _ = gc.Suite(&PksSuite{})
 
 func (s *PksSuite) SetUpTest(c *gc.C) {
 	s.storage = mock.NewStorage(
-		mock.FetchKeys(func(keys []string) ([]*openpgp.PrimaryKey, error) {
+		mock.ModifiedSince(func(time.Time) ([]string, error) {
+			tk := testKeyDefault
+			return []string{tk.rfp}, nil
+		}),
+		mock.FetchKeyrings(func(keys []string) ([]*hkpstorage.Keyring, error) {
 			tk := testKeyDefault
 			if len(keys) == 1 && testKeys[keys[0]] != nil {
 				tk = testKeys[keys[0]]
 			}
-			return openpgp.MustReadArmorKeys(testing.MustInput(tk.file)), nil
+			keyrings := []*hkpstorage.Keyring{}
+			for _, v := range openpgp.MustReadArmorKeys(testing.MustInput(tk.file)) {
+
+				keyrings = append(keyrings, &hkpstorage.Keyring{PrimaryKey: v, CTime: time.Now(), MTime: time.Now()})
+			}
+			return keyrings, nil
 		}),
 		mock.PksInit(func(address string, time time.Time) error {
+			for _, v := range statuses {
+				if v.Addr == address {
+					return errors.Errorf("Peer '%s' is already initialized", address)
+				}
+			}
+			statuses = append(statuses, &storage.Status{Addr: address, LastSync: time})
 			return nil
 		}),
-		mock.PksAll(func() (statuses []*storage.Status, err error) {
-			return nil, nil
+		mock.PksAll(func() ([]*storage.Status, error) {
+			return statuses, nil
 		}),
 		mock.PksUpdate(func(status *storage.Status) error {
-			return nil
+			for k, v := range statuses {
+				if v.Addr == status.Addr {
+					statuses[k] = status
+					return nil
+				}
+			}
+			return errors.Errorf("Peer '%s' is not initialized", status.Addr)
 		}),
 	)
 
@@ -116,7 +141,10 @@ func (s *PksSuite) TearDownTest(c *gc.C) {
 	s.srv.Close()
 }
 
-func (s *PksSuite) TestPksInit(c *gc.C) {
-	err := s.sender.initStatus()
+func (s *PksSuite) TestPks(c *gc.C) {
+	statuses, err := s.sender.Status()
+	c.Assert(err, gc.IsNil)
+	c.Assert(len(statuses), gc.Equals, 3)
+	err = s.sender.SendKeys(statuses[0])
 	c.Assert(err, gc.IsNil)
 }
