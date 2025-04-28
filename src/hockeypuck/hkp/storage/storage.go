@@ -34,7 +34,7 @@ func IsNotFound(err error) bool {
 	return errors.Is(err, ErrKeyNotFound)
 }
 
-type Keyring struct {
+type Record struct {
 	*openpgp.PrimaryKey
 
 	CTime time.Time
@@ -68,15 +68,15 @@ type Queryer interface {
 	// different implementations.
 	MatchKeyword([]string) ([]string, error)
 
-	// ModifiedSince returns matching RFingerprint IDs for keyrings modified
+	// ModifiedSince returns matching RFingerprint IDs for records modified
 	// since the given time.
 	ModifiedSince(time.Time) ([]string, error)
 
 	// FetchKeys returns the public key material matching the given RFingerprint slice.
 	FetchKeys([]string, ...string) ([]*openpgp.PrimaryKey, error)
 
-	// FetchKeyrings returns the keyring records matching the given RFingerprint slice.
-	FetchKeyrings([]string, ...string) ([]*Keyring, error)
+	// FetchRecords returns the database records matching the given RFingerprint slice.
+	FetchRecords([]string, ...string) ([]*Record, error)
 }
 
 // Inserter defines the storage API for inserting key material.

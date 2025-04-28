@@ -89,17 +89,17 @@ func (s *PksSuite) SetUpTest(c *gc.C) {
 			tk := testKeyDefault
 			return []string{tk.rfp}, nil
 		}),
-		mock.FetchKeyrings(func(keys []string) ([]*hkpstorage.Keyring, error) {
+		mock.FetchRecords(func(keys []string) ([]*hkpstorage.Record, error) {
 			tk := testKeyDefault
 			if len(keys) == 1 && testKeys[keys[0]] != nil {
 				tk = testKeys[keys[0]]
 			}
-			keyrings := []*hkpstorage.Keyring{}
+			records := []*hkpstorage.Record{}
 			for _, v := range openpgp.MustReadArmorKeys(testing.MustInput(tk.file)) {
 
-				keyrings = append(keyrings, &hkpstorage.Keyring{PrimaryKey: v, CTime: time.Now(), MTime: time.Now()})
+				records = append(records, &hkpstorage.Record{PrimaryKey: v, CTime: time.Now(), MTime: time.Now()})
 			}
-			return keyrings, nil
+			return records, nil
 		}),
 		mock.PksInit(func(address string, time time.Time) error {
 			for _, v := range statuses {

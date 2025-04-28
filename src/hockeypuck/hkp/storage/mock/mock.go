@@ -53,7 +53,7 @@ type closeFunc func() error
 type resolverFunc func([]string) ([]string, error)
 type modifiedSinceFunc func(time.Time) ([]string, error)
 type fetchKeysFunc func([]string) ([]*openpgp.PrimaryKey, error)
-type fetchKeyringsFunc func([]string) ([]*storage.Keyring, error)
+type fetchRecordsFunc func([]string) ([]*storage.Record, error)
 type insertFunc func([]*openpgp.PrimaryKey) (int, int, error)
 type replaceFunc func(*openpgp.PrimaryKey) (string, error)
 type updateFunc func(*openpgp.PrimaryKey, string, string) error
@@ -73,7 +73,7 @@ type Storage struct {
 	matchKeyword  resolverFunc
 	modifiedSince modifiedSinceFunc
 	fetchKeys     fetchKeysFunc
-	fetchKeyrings fetchKeyringsFunc
+	fetchRecords  fetchRecordsFunc
 	insert        insertFunc
 	replace       replaceFunc
 	update        updateFunc
@@ -100,8 +100,8 @@ func ModifiedSince(f modifiedSinceFunc) Option {
 	return func(m *Storage) { m.modifiedSince = f }
 }
 func FetchKeys(f fetchKeysFunc) Option { return func(m *Storage) { m.fetchKeys = f } }
-func FetchKeyrings(f fetchKeyringsFunc) Option {
-	return func(m *Storage) { m.fetchKeyrings = f }
+func FetchRecords(f fetchRecordsFunc) Option {
+	return func(m *Storage) { m.fetchRecords = f }
 }
 func Insert(f insertFunc) Option           { return func(m *Storage) { m.insert = f } }
 func Replace(f replaceFunc) Option         { return func(m *Storage) { m.replace = f } }
@@ -163,10 +163,10 @@ func (m *Storage) FetchKeys(s []string, options ...string) ([]*openpgp.PrimaryKe
 	}
 	return nil, nil
 }
-func (m *Storage) FetchKeyrings(s []string, options ...string) ([]*storage.Keyring, error) {
-	m.record("FetchKeyrings", s)
-	if m.fetchKeyrings != nil {
-		return m.fetchKeyrings(s)
+func (m *Storage) FetchRecords(s []string, options ...string) ([]*storage.Record, error) {
+	m.record("FetchRecords", s)
+	if m.fetchRecords != nil {
+		return m.fetchRecords(s)
 	}
 	return nil, nil
 }

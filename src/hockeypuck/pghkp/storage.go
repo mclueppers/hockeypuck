@@ -619,7 +619,7 @@ func (st *storage) FetchKeys(rfps []string, options ...string) ([]*openpgp.Prima
 	return result, nil
 }
 
-func (st *storage) FetchKeyrings(rfps []string, options ...string) ([]*hkpstorage.Keyring, error) {
+func (st *storage) FetchRecords(rfps []string, options ...string) ([]*hkpstorage.Record, error) {
 	autoPreen := slices.Contains(options, hkpstorage.AutoPreen)
 	var rfpIn []string
 	for _, rfp := range rfps {
@@ -635,12 +635,12 @@ func (st *storage) FetchKeyrings(rfps []string, options ...string) ([]*hkpstorag
 		return nil, errors.WithStack(err)
 	}
 
-	var result []*hkpstorage.Keyring
+	var result []*hkpstorage.Record
 	defer rows.Close()
 	for rows.Next() {
 		var bufStr, sqlMD5 string
-		var kr hkpstorage.Keyring
-		err = rows.Scan(&bufStr, &sqlMD5, &kr.CTime, &kr.MTime)
+		var record hkpstorage.Record
+		err = rows.Scan(&bufStr, &sqlMD5, &record.CTime, &record.MTime)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, errors.WithStack(err)
 		}
@@ -667,8 +667,8 @@ func (st *storage) FetchKeyrings(rfps []string, options ...string) ([]*hkpstorag
 				continue
 			}
 		}
-		kr.PrimaryKey = key
-		result = append(result, &kr)
+		record.PrimaryKey = key
+		result = append(result, &record)
 	}
 	err = rows.Err()
 	if err != nil {

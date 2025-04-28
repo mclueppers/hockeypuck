@@ -123,7 +123,7 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		return errors.WithStack(err)
 	}
 
-	keys, err := sender.hkpStorage.FetchKeyrings(uuids)
+	keys, err := sender.hkpStorage.FetchRecords(uuids)
 	if err != nil {
 		return errors.WithStack(err)
 	}
