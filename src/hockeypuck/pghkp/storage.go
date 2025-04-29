@@ -687,7 +687,7 @@ func readOneKey(b []byte, rfingerprint string) (*openpgp.PrimaryKey, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	} else if len(keys) > 1 {
-		return nil, errors.Errorf("multiple keys in keyring: %v, %v", keys[0].Fingerprint(), keys[1].Fingerprint())
+		return nil, errors.Errorf("multiple keys in record: %v, %v", keys[0].Fingerprint(), keys[1].Fingerprint())
 	}
 	if keys[0].RFingerprint != rfingerprint {
 		return nil, errors.Errorf("RFingerprint mismatch: expected=%q got=%q",
