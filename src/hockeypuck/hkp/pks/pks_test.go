@@ -131,8 +131,8 @@ func (s *PksSuite) SetUpTest(c *gc.C) {
 	s.handler.Register(r)
 	s.srv = httptest.NewServer(r)
 
-	config := &Config{From: "test@example.com", To: []string{"hkp://" + s.srv.Listener.Addr().String()}, SMTP: SMTPConfig{Host: "localhost:25"}}
-	sender, err := NewSender(s.storage, s.storage, config)
+	settings := &Settings{From: "test@example.com", To: []string{"hkp://" + s.srv.Listener.Addr().String()}, SMTP: SMTPConfig{Host: "localhost:25"}}
+	sender, err := NewSender(s.storage, s.storage, settings)
 	c.Assert(err, gc.IsNil)
 	s.sender = sender
 }

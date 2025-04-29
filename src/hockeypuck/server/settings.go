@@ -163,15 +163,16 @@ func DefaultOpenPGP() OpenPGPConfig {
 
 type Settings struct {
 	Conflux confluxConfig `toml:"conflux"`
-	PKS     pks.Config    `toml:"pks"`
 
 	IndexTemplate  string `toml:"indexTemplate"`
 	VIndexTemplate string `toml:"vindexTemplate"`
 	StatsTemplate  string `toml:"statsTemplate"`
 
+	// HKPSConfig is a pointer so it can default to nil
 	HKP  HKPConfig   `toml:"hkp"`
 	HKPS *HKPSConfig `toml:"hkps"`
 
+	PKS     *pks.Settings     `toml:"pks"`
 	Metrics *metrics.Settings `toml:"metrics"`
 
 	OpenPGP OpenPGPConfig `toml:"openpgp"`
@@ -212,6 +213,7 @@ var (
 func DefaultSettings() Settings {
 	metricsSettings := metrics.DefaultSettings()
 	reconSettings := recon.DefaultSettings()
+	pksSettings := pks.DefaultSettings()
 	return Settings{
 		Conflux: confluxConfig{
 			Recon: reconConfig{
@@ -221,6 +223,7 @@ func DefaultSettings() Settings {
 				},
 			},
 		},
+		PKS: pksSettings,
 		HKP: HKPConfig{
 			Bind:              DefaultHKPBind,
 			LogRequestDetails: DefaultLogRequestDetails,

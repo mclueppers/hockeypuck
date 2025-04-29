@@ -147,7 +147,7 @@ func NewServer(settings *Settings) (*Server, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	s.pksSender, err = pks.NewSender(s.st, s.st, &settings.PKS)
+	s.pksSender, err = pks.NewSender(s.st, s.st, settings.PKS)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

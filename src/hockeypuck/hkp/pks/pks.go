@@ -43,7 +43,7 @@ import (
 // Max delay backoff multiplier when there are SMTP errors.
 const maxDelay = 60
 
-type Config struct {
+type Settings struct {
 	From string     `toml:"from"`
 	To   []string   `toml:"to"`
 	SMTP SMTPConfig `toml:"smtp"`
@@ -60,6 +60,14 @@ type SMTPConfig struct {
 	Password string `toml:"pass"`
 }
 
+func DefaultSettings() *Settings {
+	return &Settings{
+		SMTP: SMTPConfig{
+			Host: DefaultSMTPHost,
+		},
+	}
+}
+
 type VKSRequest struct {
 	Keytext string `json:"keytext"`
 }
@@ -68,26 +76,26 @@ type VKSRequest struct {
 type Sender struct {
 	hkpStorage hkpstorage.Storage
 	storage    storage.Storage
-	config     *Config
+	settings   *Settings
 	smtpAuth   smtp.Auth
 
 	t tomb.Tomb
 }
 
 // Initialize from command line switches if fields not set.
-func NewSender(hkpStorage hkpstorage.Storage, Storage storage.Storage, config *Config) (*Sender, error) {
-	if config == nil {
-		return nil, errors.New("PKS synchronization not configured")
+func NewSender(hkpStorage hkpstorage.Storage, Storage storage.Storage, settings *Settings) (*Sender, error) {
+	if settings == nil {
+		return nil, errors.New("PKS synchronization not settingsured")
 	}
 
 	sender := &Sender{
 		hkpStorage: hkpStorage,
 		storage:    Storage,
-		config:     config,
+		settings:   settings,
 	}
 
 	var err error
-	authHost := sender.config.SMTP.Host
+	authHost := sender.settings.SMTP.Host
 	if parts := strings.Split(authHost, ":"); len(parts) >= 1 {
 		// Strip off the port, use only the hostname for auth
 		authHost, _, err = net.SplitHostPort(authHost)
@@ -96,9 +104,9 @@ func NewSender(hkpStorage hkpstorage.Storage, Storage storage.Storage, config *C
 		}
 	}
 	sender.smtpAuth = smtp.PlainAuth(
-		sender.config.SMTP.ID,
-		sender.config.SMTP.User,
-		sender.config.SMTP.Password, authHost)
+		sender.settings.SMTP.ID,
+		sender.settings.SMTP.User,
+		sender.settings.SMTP.Password, authHost)
 
 	err = sender.initStatus()
 	if err != nil {
@@ -108,7 +116,7 @@ func NewSender(hkpStorage hkpstorage.Storage, Storage storage.Storage, config *C
 }
 
 func (sender *Sender) initStatus() error {
-	for _, addr := range sender.config.To {
+	for _, addr := range sender.settings.To {
 		err := sender.storage.PKSInit(addr, time.Now())
 		if err != nil {
 			return errors.WithStack(err)
@@ -166,8 +174,8 @@ func (sender *Sender) SendKey(addr string, key *openpgp.PrimaryKey) error {
 		if err != nil {
 			return err
 		}
-		return smtp.SendMail(sender.config.SMTP.Host, sender.smtpAuth,
-			sender.config.From, []string{emailAddr}, msg.Bytes())
+		return smtp.SendMail(sender.settings.SMTP.Host, sender.smtpAuth,
+			sender.settings.From, []string{emailAddr}, msg.Bytes())
 	}
 	urlMatch := regexp.MustCompile(`^(hkps?|vks)://(([^:]+)|\[([0-9A-Fa-f:]+)\])(:(\d+))?$`)
 	matches = urlMatch.FindStringSubmatch(addr)
