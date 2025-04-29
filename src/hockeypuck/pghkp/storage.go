@@ -1552,6 +1552,7 @@ func (st *storage) PKSGet(addr string) (*pksstorage.Status, error) {
 			LastSync:  lastSync,
 			LastError: errors.Errorf(lastError),
 		}
+		// Only process the first result; the storage SHOULD NOT contain duplicate records
 		break
 	}
 	return result, nil

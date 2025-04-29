@@ -33,6 +33,7 @@ import (
 	"hockeypuck/testing"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/pkg/errors"
 	gc "gopkg.in/check.v1"
 
 	"hockeypuck/hkp"
@@ -583,7 +584,7 @@ func (s *S) TestAddBareRevocation(c *gc.C) {
 func (s *S) TestPKS(c *gc.C) {
 	testAddr := "mailto:test@example.com"
 	now := time.Now()
-	testError := "unknown error"
+	testError := errors.Errorf("unknown error")
 	testStatus := pksstorage.Status{Addr: testAddr, LastSync: now, LastError: testError}
 
 	err := s.storage.PKSInit(testAddr, now)
@@ -612,7 +613,7 @@ func (s *S) TestPKS(c *gc.C) {
 	c.Assert(status.LastSync.UTC(), gc.Equals, now.UTC().Truncate(time.Microsecond))
 	c.Assert(status.LastError, gc.Equals, testError)
 
-	testStatus2 := pksstorage.Status{Addr: testAddr, LastSync: next, LastError: ""}
+	testStatus2 := pksstorage.Status{Addr: testAddr, LastSync: next, LastError: nil}
 	err = s.storage.PKSUpdate(testStatus2)
 	c.Assert(err, gc.IsNil)
 	status, err = s.storage.PKSGet(testAddr)
