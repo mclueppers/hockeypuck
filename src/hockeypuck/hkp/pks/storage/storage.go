@@ -37,5 +37,5 @@ type Storage interface {
 	PKSAll() ([]*Status, error)                    // Return the status of all PKS peers
 	PKSUpdate(status *Status) error                // Update the status of one PKS peer
 	PKSRemove(addr string) error                   // Remove one PKS peer
-	PKSGet(addr string) *Status                    // Return the status of one PKS peer
+	PKSGet(addr string) (*Status, error)           // Return the status of one PKS peer
 }

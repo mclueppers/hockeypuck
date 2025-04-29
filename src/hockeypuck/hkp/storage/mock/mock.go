@@ -245,10 +245,10 @@ func (m *Storage) PKSRemove(addr string) error {
 	}
 	return nil
 }
-func (m *Storage) PKSGet(addr string) *pksstorage.Status {
+func (m *Storage) PKSGet(addr string) (*pksstorage.Status, error) {
 	m.record("PKSGet", addr)
 	if m.pksGet != nil {
-		return m.pksGet(addr)
+		return m.pksGet(addr), nil
 	}
-	return nil
+	return nil, nil
 }

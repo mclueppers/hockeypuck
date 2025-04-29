@@ -592,13 +592,13 @@ func (s *S) TestPKS(c *gc.C) {
 	statuses, err := s.storage.PKSAll()
 	c.Assert(err, gc.IsNil)
 	c.Assert(statuses, gc.HasLen, 1)
-	status := &statuses[0]
+	status := statuses[0]
 	c.Assert(status.Addr, gc.Equals, testAddr)
 	c.Assert(status.LastSync.UTC(), gc.Equals, now.UTC().Round(time.Microsecond))
 	c.Assert(status.LastError, gc.IsNil)
 
 	// PKSUpdate should populate LastError
-	err = s.storage.PKSUpdate(testStatus)
+	err = s.storage.PKSUpdate(&testStatus)
 	c.Assert(err, gc.IsNil)
 	status, err = s.storage.PKSGet(testAddr)
 	c.Assert(err, gc.IsNil)
@@ -616,7 +616,7 @@ func (s *S) TestPKS(c *gc.C) {
 	c.Assert(status.LastError.Error(), gc.Equals, testError.Error())
 
 	testStatus2 := pksstorage.Status{Addr: testAddr, LastSync: next, LastError: nil}
-	err = s.storage.PKSUpdate(testStatus2)
+	err = s.storage.PKSUpdate(&testStatus2)
 	c.Assert(err, gc.IsNil)
 	status, err = s.storage.PKSGet(testAddr)
 	c.Assert(err, gc.IsNil)

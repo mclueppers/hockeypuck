@@ -1503,13 +1503,13 @@ func (st *storage) PKSInit(addr string, lastSync time.Time) error {
 }
 
 // Return the status of all PKS peers.
-func (st *storage) PKSAll() ([]pksstorage.Status, error) {
+func (st *storage) PKSAll() ([]*pksstorage.Status, error) {
 	rows, err := st.Query("SELECT addr, last_sync, last_error FROM pks_status")
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	var result []pksstorage.Status
+	var result []*pksstorage.Status
 	defer rows.Close()
 	for rows.Next() {
 		var addr string
@@ -1523,7 +1523,7 @@ func (st *storage) PKSAll() ([]pksstorage.Status, error) {
 		if lastErrorString.Valid {
 			lastError = errors.Errorf(lastErrorString.String)
 		}
-		result = append(result, pksstorage.Status{
+		result = append(result, &pksstorage.Status{
 			Addr:      addr,
 			LastSync:  lastSync,
 			LastError: lastError,
@@ -1569,7 +1569,7 @@ func (st *storage) PKSGet(addr string) (*pksstorage.Status, error) {
 }
 
 // Update the status of one PKS peer.
-func (st *storage) PKSUpdate(status pksstorage.Status) error {
+func (st *storage) PKSUpdate(status *pksstorage.Status) error {
 	stmt, err := st.Prepare("UPDATE pks_status SET last_sync = $2, last_error = $3 WHERE addr = $1")
 	if err != nil {
 		return errors.WithStack(err)

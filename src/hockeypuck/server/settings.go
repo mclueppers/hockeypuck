@@ -28,6 +28,7 @@ import (
 	"github.com/pkg/errors"
 
 	"hockeypuck/conflux/recon"
+	"hockeypuck/hkp/pks"
 	"hockeypuck/metrics"
 )
 
@@ -64,12 +65,6 @@ type HKPSConfig struct {
 	LogRequestDetails bool   `toml:"logRequestDetails"`
 	Cert              string `toml:"cert"`
 	Key               string `toml:"key"`
-}
-
-type PKSConfig struct {
-	From string     `toml:"from"`
-	To   []string   `toml:"to"`
-	SMTP SMTPConfig `toml:"smtp"`
 }
 
 const (
@@ -112,7 +107,6 @@ const (
 )
 
 type OpenPGPConfig struct {
-	PKS      *PKSConfig          `toml:"pks"`
 	NWorkers int                 `toml:"nworkers"`
 	DB       DBConfig            `toml:"db"`
 	Headers  OpenPGPArmorHeaders `toml:"headers"`
@@ -169,6 +163,7 @@ func DefaultOpenPGP() OpenPGPConfig {
 
 type Settings struct {
 	Conflux confluxConfig `toml:"conflux"`
+	PKS     pks.Config    `toml:"pks"`
 
 	IndexTemplate  string `toml:"indexTemplate"`
 	VIndexTemplate string `toml:"vindexTemplate"`

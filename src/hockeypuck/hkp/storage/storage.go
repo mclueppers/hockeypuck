@@ -24,6 +24,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	pksstorage "hockeypuck/hkp/pks/storage"
 	"hockeypuck/openpgp"
 )
 
@@ -49,6 +50,7 @@ type Storage interface {
 	Updater
 	Deleter
 	Notifier
+	pksstorage.Storage
 }
 
 // Queryer defines the storage API for search and retrieval of public key material.
