@@ -131,7 +131,7 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		// Send key email
 		log.Debugf("sending key %q to PKS %s", key.PrimaryKey.Fingerprint(), status.Addr)
 		err = sender.SendKey(status.Addr, key.PrimaryKey)
-		status.LastError = err.Error()
+		status.LastError = err
 		if err != nil {
 			log.Errorf("error sending key to PKS %s: %v", status.Addr, err)
 			storageErr := sender.storage.PKSUpdate(status)

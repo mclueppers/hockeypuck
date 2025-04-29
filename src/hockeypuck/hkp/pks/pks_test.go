@@ -124,17 +124,17 @@ func (s *PksSuite) SetUpTest(c *gc.C) {
 		}),
 	)
 
-	config := &Config{From: "test@example.com", To: peers, SMTP: SMTPConfig{Host: "localhost:25"}}
-	sender, err := NewSender(s.storage, s.storage, config)
-	c.Assert(err, gc.IsNil)
-	s.sender = sender
-
 	r := httprouter.New()
 	handler, err := hkp.NewHandler(s.storage)
 	c.Assert(err, gc.IsNil)
 	s.handler = handler
 	s.handler.Register(r)
 	s.srv = httptest.NewServer(r)
+
+	config := &Config{From: "test@example.com", To: []string{"hkp://" + s.srv.Listener.Addr().String()}, SMTP: SMTPConfig{Host: "localhost:25"}}
+	sender, err := NewSender(s.storage, s.storage, config)
+	c.Assert(err, gc.IsNil)
+	s.sender = sender
 }
 
 func (s *PksSuite) TearDownTest(c *gc.C) {
@@ -144,7 +144,7 @@ func (s *PksSuite) TearDownTest(c *gc.C) {
 func (s *PksSuite) TestPks(c *gc.C) {
 	statuses, err := s.sender.Status()
 	c.Assert(err, gc.IsNil)
-	c.Assert(len(statuses), gc.Equals, 3)
+	c.Assert(len(statuses), gc.Equals, 1)
 	err = s.sender.SendKeys(statuses[0])
 	c.Assert(err, gc.IsNil)
 }

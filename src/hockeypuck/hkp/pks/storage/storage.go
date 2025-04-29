@@ -26,7 +26,7 @@ type Status struct {
 	// Timestamp of the last sync to this server.
 	LastSync time.Time
 	// Error message of last sync failure.
-	LastError string
+	LastError error
 }
 
 // Storage implements a simple interface to persist the status of multiple PKS peers.
