@@ -1495,7 +1495,7 @@ func (st *storage) PKSInit(addr string, lastSync time.Time) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	_, err = stmt.Exec(addr, lastSync, "")
+	_, err = stmt.Exec(addr, lastSync, sql.NullString{Valid: false})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -1512,16 +1512,21 @@ func (st *storage) PKSAll() ([]pksstorage.Status, error) {
 	var result []pksstorage.Status
 	defer rows.Close()
 	for rows.Next() {
-		var addr, lastError string
+		var addr string
+		var lastErrorString sql.NullString
+		var lastError error
 		var lastSync time.Time
-		err = rows.Scan(&addr, &lastSync, &lastError)
+		err = rows.Scan(&addr, &lastSync, &lastErrorString)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, errors.WithStack(err)
+		}
+		if lastErrorString.Valid {
+			lastError = errors.Errorf(lastErrorString.String)
 		}
 		result = append(result, pksstorage.Status{
 			Addr:      addr,
 			LastSync:  lastSync,
-			LastError: errors.Errorf(lastError),
+			LastError: lastError,
 		})
 	}
 	return result, nil
@@ -1541,16 +1546,21 @@ func (st *storage) PKSGet(addr string) (*pksstorage.Status, error) {
 	var result *pksstorage.Status
 	defer rows.Close()
 	for rows.Next() {
-		var addr, lastError string
+		var addr string
+		var lastErrorString sql.NullString
+		var lastError error
 		var lastSync time.Time
-		err = rows.Scan(&addr, &lastSync, &lastError)
+		err = rows.Scan(&addr, &lastSync, &lastErrorString)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, errors.WithStack(err)
+		}
+		if lastErrorString.Valid {
+			lastError = errors.Errorf(lastErrorString.String)
 		}
 		result = &pksstorage.Status{
 			Addr:      addr,
 			LastSync:  lastSync,
-			LastError: errors.Errorf(lastError),
+			LastError: lastError,
 		}
 		// Only process the first result; the storage SHOULD NOT contain duplicate records
 		break
@@ -1564,7 +1574,11 @@ func (st *storage) PKSUpdate(status pksstorage.Status) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	_, err = stmt.Exec(status.Addr, status.LastSync, status.LastError.Error())
+	lastErrorString := sql.NullString{Valid: false}
+	if status.LastError != nil {
+		lastErrorString = sql.NullString{String: status.LastError.Error(), Valid: true}
+	}
+	_, err = stmt.Exec(status.Addr, status.LastSync, lastErrorString)
 	if err != nil {
 		return errors.WithStack(err)
 	}
