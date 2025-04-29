@@ -130,6 +130,9 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	if len(uuids) == 0 {
+		return nil
+	}
 
 	keys, err := sender.hkpStorage.FetchRecords(uuids)
 	if err != nil {
