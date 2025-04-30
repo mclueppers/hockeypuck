@@ -32,6 +32,7 @@ import (
 	"github.com/pkg/errors"
 	"gopkg.in/tomb.v2"
 
+	"hockeypuck/conflux/recon"
 	"hockeypuck/openpgp"
 
 	log "github.com/sirupsen/logrus"
@@ -70,6 +71,34 @@ func DefaultSettings() *Settings {
 
 type VKSRequest struct {
 	Keytext string `json:"keytext"`
+}
+
+type PKSFailoverHandler struct {
+	Sender *Sender
+}
+
+func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
+	if p.PKSFailover {
+		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
+		err := h.Sender.storage.PKSRemove(pksAddr)
+		if err != nil {
+			log.Errorf("could not remove %s from PKS list", pksAddr)
+		}
+	}
+}
+
+func (h PKSFailoverHandler) ReconUnavailable(p *recon.Partner) {
+	if p.PKSFailover {
+		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
+		err := h.Sender.storage.PKSInit(pksAddr, time.Now())
+		if err != nil {
+			log.Errorf("could not add %s to PKS list", pksAddr)
+		}
+	}
+}
+
+func (PKSFailoverHandler) ConnectionFailed(*recon.Partner) {
+	// Do nothing on connection failures
 }
 
 // Basic implementation of outbound PKS synchronization

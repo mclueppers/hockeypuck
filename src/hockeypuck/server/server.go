@@ -143,11 +143,11 @@ func NewServer(settings *Settings) (*Server, error) {
 
 	keyReaderOptions := KeyReaderOptions(settings)
 	userAgent := fmt.Sprintf("%s/%s", settings.Software, settings.Version)
-	s.sksPeer, err = sks.NewPeer(s.st, settings.Conflux.Recon.LevelDB.Path, &settings.Conflux.Recon.Settings, keyReaderOptions, userAgent)
+	s.pksSender, err = pks.NewSender(s.st, s.st, settings.PKS)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	s.pksSender, err = pks.NewSender(s.st, s.st, settings.PKS)
+	s.sksPeer, err = sks.NewPeer(s.st, settings.Conflux.Recon.LevelDB.Path, &settings.Conflux.Recon.Settings, keyReaderOptions, userAgent, pks.PKSFailoverHandler{Sender: s.pksSender})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
