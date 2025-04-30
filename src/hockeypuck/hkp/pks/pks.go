@@ -79,6 +79,7 @@ type PKSFailoverHandler struct {
 
 func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
 	if p.PKSFailover {
+		log.Infof("recon started with %s, removing from PKS target list", p.HTTPAddr)
 		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
 		err := h.Sender.storage.PKSRemove(pksAddr)
 		if err != nil {
@@ -89,6 +90,7 @@ func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
 
 func (h PKSFailoverHandler) ReconUnavailable(p *recon.Partner) {
 	if p.PKSFailover {
+		log.Infof("recon unavailable with %s, adding to PKS target list", p.HTTPAddr)
 		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
 		err := h.Sender.storage.PKSInit(pksAddr, time.Now())
 		if err != nil {
