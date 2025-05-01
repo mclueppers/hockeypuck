@@ -53,23 +53,6 @@ var (
 	}
 )
 
-type testPeer struct {
-	addr string
-}
-
-var (
-	testPeer1 = &testPeer{
-		addr: "hkp://localhost:60001",
-	}
-	testPeer2 = &testPeer{
-		addr: "hkps://localhost:60002",
-	}
-	testPeer3 = &testPeer{
-		addr: "vks://localhost:60003",
-	}
-	peers = []string{testPeer1.addr, testPeer2.addr, testPeer3.addr}
-)
-
 var statuses []*storage.Status
 
 func Test(t *stdtesting.T) { gc.TestingT(t) }

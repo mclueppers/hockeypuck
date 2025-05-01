@@ -83,7 +83,7 @@ func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
 		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
 		err := h.Sender.storage.PKSRemove(pksAddr)
 		if err != nil {
-			log.Errorf("could not remove %s from PKS list", pksAddr)
+			log.Errorf("could not remove %s from PKS: %v", pksAddr, err)
 		}
 	}
 }
@@ -92,9 +92,15 @@ func (h PKSFailoverHandler) ReconUnavailable(p *recon.Partner) {
 	if p.PKSFailover {
 		log.Infof("recon unavailable with %s, adding to PKS target list", p.HTTPAddr)
 		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
-		err := h.Sender.storage.PKSInit(pksAddr, time.Now())
+		lastSync := p.LastRecovery
+		// Don't flood the remote server if lastSync is in the distant past
+		if lastSync.AddDate(0, 0, 1).Before(time.Now()) {
+			lastSync = time.Now().AddDate(0, 0, -1)
+		}
+		// PKSInit does not update lastSync if pksAddr is already in the list
+		err := h.Sender.storage.PKSInit(pksAddr, lastSync)
 		if err != nil {
-			log.Errorf("could not add %s to PKS list", pksAddr)
+			log.Errorf("could not add %s to PKS: %v", pksAddr, err)
 		}
 	}
 }
