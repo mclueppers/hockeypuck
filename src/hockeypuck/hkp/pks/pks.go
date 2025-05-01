@@ -41,8 +41,11 @@ import (
 	hkpstorage "hockeypuck/hkp/storage"
 )
 
-// Max delay backoff multiplier when there are SMTP errors.
+// Max delay backoff multiplier (in seconds) when there are SMTP errors.
 const maxDelay = 60
+
+// Max days in the past to search for updates.
+const maxHistoryDays = 1
 
 type Settings struct {
 	From string     `toml:"from"`
@@ -92,13 +95,7 @@ func (h PKSFailoverHandler) ReconUnavailable(p *recon.Partner) {
 	if p.PKSFailover {
 		log.Infof("recon unavailable with %s, adding to PKS target list", p.HTTPAddr)
 		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
-		lastSync := p.LastRecovery
-		// Don't flood the remote server if lastSync is in the distant past
-		if lastSync.AddDate(0, 0, 1).Before(time.Now()) {
-			lastSync = time.Now().AddDate(0, 0, -1)
-		}
-		// PKSInit does not update lastSync if pksAddr is already in the list
-		err := h.Sender.storage.PKSInit(pksAddr, lastSync)
+		err := h.Sender.storage.PKSInit(pksAddr, p.LastRecovery)
 		if err != nil {
 			log.Errorf("could not add %s to PKS: %v", pksAddr, err)
 		}
@@ -163,7 +160,13 @@ func (sender *Sender) initStatus() error {
 }
 
 func (sender *Sender) SendKeys(status *storage.Status) error {
-	uuids, err := sender.hkpStorage.ModifiedSince(status.LastSync)
+	// Don't flood the remote server if lastSync is in the distant past
+	lastSync := status.LastSync
+	if lastSync.AddDate(0, 0, maxHistoryDays).Before(time.Now()) {
+		lastSync = time.Now().AddDate(0, 0, -maxHistoryDays)
+	}
+
+	uuids, err := sender.hkpStorage.ModifiedSince(lastSync)
 	if err != nil {
 		return errors.WithStack(err)
 	}
