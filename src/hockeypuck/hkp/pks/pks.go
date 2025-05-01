@@ -176,7 +176,6 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		return errors.WithStack(err)
 	}
 	for _, key := range keys {
-		// Send key email
 		log.Debugf("sending key %q to PKS %s", key.PrimaryKey.Fingerprint(), status.Addr)
 		err = sender.SendKey(status.Addr, key.PrimaryKey)
 		status.LastError = err
@@ -194,6 +193,8 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		// Rate limit ourselves to prevent being blocked
+		time.Sleep(time.Second * 10)
 	}
 	return nil
 }
