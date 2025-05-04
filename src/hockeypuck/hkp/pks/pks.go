@@ -44,6 +44,9 @@ import (
 // Max delay backoff multiplier (in seconds) when there are SMTP errors.
 const maxDelay = 60
 
+// Delay (in seconds) between successive PKS requests to the same recipient.
+const repeatDelay = 10
+
 // Max days in the past to search for updates.
 const maxHistoryDays = 1
 
@@ -197,7 +200,7 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 			return errors.WithStack(err)
 		}
 		// Rate limit ourselves to prevent being blocked
-		time.Sleep(time.Second * 10)
+		time.Sleep(time.Second * repeatDelay)
 	}
 	return nil
 }
