@@ -26,6 +26,7 @@ import (
 	"net/smtp"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -91,6 +92,8 @@ func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
 		if err != nil {
 			log.Errorf("could not remove %s from PKS: %v", pksAddr, err)
 		}
+		// Update the in-memory PKS peer list
+		h.Sender.settings.To = slices.DeleteFunc(h.Sender.settings.To, func(s string) bool { return s == pksAddr })
 	}
 }
 
@@ -101,6 +104,10 @@ func (h PKSFailoverHandler) ReconUnavailable(p *recon.Partner) {
 		err := h.Sender.storage.PKSInit(pksAddr, p.LastRecovery)
 		if err != nil {
 			log.Errorf("could not add %s to PKS: %v", pksAddr, err)
+		}
+		// Update the in-memory PKS peer list
+		if !slices.Contains(h.Sender.settings.To, pksAddr) {
+			h.Sender.settings.To = append(h.Sender.settings.To, pksAddr)
 		}
 	}
 }
@@ -281,12 +288,14 @@ func (sender *Sender) run() error {
 		case <-timer.C:
 		}
 
-		statuses, err := sender.storage.PKSAll()
-		if err != nil {
-			log.Errorf("failed to obtain PKS sync status: %v", err)
-			goto DELAY
-		}
-		for _, status := range statuses {
+		// There may be PKS statuses in the DB that are not in our running config,
+		// e.g. after a restart. Always iterate over the in-memory list.
+		for _, addr := range sender.settings.To {
+			status, err := sender.storage.PKSGet(addr)
+			if err != nil {
+				log.Errorf("failed to obtain PKS sync status: %v", err)
+				goto DELAY
+			}
 			err = sender.SendKeys(status)
 			if err != nil {
 				// Increase delay backoff
