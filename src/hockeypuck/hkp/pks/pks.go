@@ -80,6 +80,11 @@ type VKSRequest struct {
 	Keytext string `json:"keytext"`
 }
 
+// There is an in-DB copy of the PKS status of each peer, an on-disk copy of the configured (default) PKS peer list,
+// and an in-memory copy of the running PKS peer list. PKSFailoverHandler does not assume that these are in sync.
+// This is because hockeypuck may just have been restarted with a modified config, and/or the DB may have been
+// modified externally. The handler routines are therefore noisier than might be expected; this is intentional.
+
 type PKSFailoverHandler struct {
 	Sender *Sender
 }
