@@ -85,9 +85,9 @@ type PKSFailoverHandler struct {
 }
 
 func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
-	pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
-	if p.PKSFailover && slices.Contains(h.Sender.settings.To, pksAddr) {
-		log.Infof("removing %s from PKS target list", pksAddr)
+	if p.PKSFailover {
+		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
+		log.Infof("removing any copies of %s from PKS target list", pksAddr)
 		err := h.Sender.storage.PKSRemove(pksAddr)
 		if err != nil {
 			log.Errorf("could not remove PKS status of %s from DB: %v", pksAddr, err)
@@ -98,15 +98,17 @@ func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
 }
 
 func (h PKSFailoverHandler) ReconUnavailable(p *recon.Partner) {
-	pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
-	if p.PKSFailover && !slices.Contains(h.Sender.settings.To, pksAddr) {
+	if p.PKSFailover {
+		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
 		log.Infof("temporarily adding %s to PKS target list", pksAddr)
 		err := h.Sender.storage.PKSInit(pksAddr, p.LastRecovery)
 		if err != nil {
 			log.Errorf("could not add PKS status of %s to DB: %v", pksAddr, err)
 		}
 		// Update the in-memory PKS peer list
-		h.Sender.settings.To = append(h.Sender.settings.To, pksAddr)
+		if !slices.Contains(h.Sender.settings.To, pksAddr) {
+			h.Sender.settings.To = append(h.Sender.settings.To, pksAddr)
+		}
 	}
 }
 
