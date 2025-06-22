@@ -92,8 +92,8 @@ type PKSFailoverHandler struct {
 func (h PKSFailoverHandler) ReconStarted(p *recon.Partner) {
 	if p.PKSFailover {
 		pksAddr := fmt.Sprintf("hkp://%s", p.HTTPAddr)
+		log.Infof("removing any copies of %s from PKS target list", pksAddr)
 		// Don't remove PKS status from DB, in case it is flappy on timescales < maxHistoryDays
-		//		log.Infof("removing any copies of %s from PKS target list", pksAddr)
 		//		err := h.Sender.storage.PKSRemove(pksAddr)
 		//		if err != nil {
 		//			log.Errorf("could not remove PKS status of %s from DB: %v", pksAddr, err)
