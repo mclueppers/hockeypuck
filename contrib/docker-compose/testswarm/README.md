@@ -17,17 +17,21 @@ You should wait *at least five minutes* for the environment to fully stabilise b
 
 To perform the tests, run `make test`.
 
-The only currently implemented test checks the total number of keys reported by the hockeypuck front end and postgres back ends of each instance.
-A successful test will return the same total for each.
+Currently implemented tests include:
 
-To see the logs, run `docker-compose logs -f`.
+* `totals` checks the total number of keys reported by the hockeypuck front end and postgres back ends of each instance.
+    A successful test will return the same total for each.
+* `pkslog` returns the most recent log output concerning each PKS peer connection.
+    Test success is scenario-dependent.
+
+To see the full logs, run `docker-compose logs -f`.
 
 # Scenario 1
 
 The base scenario is as follows:
 
 * hkp0 has an extra filter "testing" configured to simulate a breaking upgrade; it peers with hkp1 and hkp2 but due to the filter mismatch cannot reconcile with either.
-* hkp1 peers with both hkp0 and hkp2; due to the filter mismatch it cannot recon with either.
+* hkp1 peers with both hkp0 and hkp2; hkp2 should work correctly but hkp0 will not due to the filter mismatch.
 * hkp2 peers with both hkp0 and hkp1; hkp1 should work correctly but hkp0 will not due to the filter mismatch.
 * hkp3 attempts to peer with all the others, but this will not succeed because none of them peer back.
 
@@ -66,6 +70,7 @@ This is the same as scenario 1, except:
     It also has hkp3 in its explicit PKS peer list.
 * hkp1 has `pksFailover` set on hkp0, so it should fall back to PKS sync with hkp0.    
     It also has hkp3 in its explicit PKS peer list.
+* hkp2 is unchanged.
 * hkp3 has no explicit PKS peer list, but it does have `pksFailover` set on hkp0.
 
 The above configuration SHOULD fully reconcile.
