@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2014  Casey Marshall
+   Copyright (C) 2012-2025 Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -180,6 +180,8 @@ type Settings struct {
 
 	OpenPGP OpenPGPConfig `toml:"openpgp"`
 
+	RateLimit RateLimitConfig `toml:"rateLimit"`
+
 	LogFile  string `toml:"logfile"`
 	LogLevel string `toml:"loglevel"`
 
@@ -233,6 +235,7 @@ func DefaultSettings() Settings {
 		},
 		Metrics:        metricsSettings,
 		OpenPGP:        DefaultOpenPGP(),
+		RateLimit:      DefaultRateLimitConfig(),
 		LogLevel:       DefaultLogLevel,
 		Software:       Software,
 		Version:        Version,
