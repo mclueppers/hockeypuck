@@ -35,6 +35,7 @@ type Server struct {
 	sksPeer         *sks.Peer
 	logWriter       io.WriteCloser
 	metricsListener *metrics.Metrics
+	rateLimiter     *RateLimiter
 
 	t                 tomb.Tomb
 	hkpAddr, hkpsAddr string
@@ -101,7 +102,24 @@ func NewServer(settings *Settings) (*Server, error) {
 		return nil, err
 	}
 
+	keyReaderOptions := KeyReaderOptions(settings)
+	userAgent := fmt.Sprintf("%s/%s", settings.Software, settings.Version)
+	s.sksPeer, err = sks.NewPeer(s.st, settings.Conflux.Recon.LevelDB.Path, &settings.Conflux.Recon.Settings, keyReaderOptions, userAgent)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	s.middle = interpose.New()
+
+	// Initialize rate limiter with partner provider for keyserver sync exemptions
+	s.rateLimiter, err = NewRateLimiterWithPartners(&settings.RateLimit, s.sksPeer)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	// Add rate limiting middleware first (before logging)
+	s.middle.Use(s.rateLimiter.Middleware())
+
 	s.middle.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			start := time.Now()
@@ -138,13 +156,6 @@ func NewServer(settings *Settings) (*Server, error) {
 		})
 	})
 	s.middle.UseHandler(s.r)
-
-	keyReaderOptions := KeyReaderOptions(settings)
-	userAgent := fmt.Sprintf("%s/%s", settings.Software, settings.Version)
-	s.sksPeer, err = sks.NewPeer(s.st, settings.Conflux.Recon.LevelDB.Path, &settings.Conflux.Recon.Settings, keyReaderOptions, userAgent)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
 
 	s.metricsListener = metrics.NewMetrics(settings.Metrics)
 
@@ -209,6 +220,7 @@ type stats struct {
 	Peers         []statsPeer      `json:"peers"`
 	NumKeys       int              `json:"numkeys,omitempty"`
 	ServerContact string           `json:"server_contact,omitempty"`
+	RateLimit     interface{}      `json:"rateLimit,omitempty"`
 
 	Total  int
 	Hourly []loadStat
@@ -367,6 +379,14 @@ func (s *Server) stats(req *http.Request) (interface{}, error) {
 		result.Peers = append(result.Peers, peerInfo)
 	}
 	sort.Sort(statsPeers(result.Peers))
+
+	// Add rate limiting statistics
+	if s.rateLimiter != nil {
+		rateLimitStats := s.rateLimiter.GetRateLimitStats()
+		rateLimitStats["tor"] = s.rateLimiter.GetTorExitStats()
+		result.RateLimit = rateLimitStats
+	}
+
 	return result, nil
 }
 
@@ -497,6 +517,9 @@ func (s *Server) Stop() {
 	}
 	if s.metricsListener != nil {
 		s.metricsListener.Stop()
+	}
+	if s.rateLimiter != nil {
+		s.rateLimiter.Stop()
 	}
 	s.t.Kill(ErrStopping)
 	s.t.Wait()
