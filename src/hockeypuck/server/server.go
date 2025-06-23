@@ -23,6 +23,9 @@ import (
 	"hockeypuck/metrics"
 	"hockeypuck/openpgp"
 	"hockeypuck/pghkp"
+	"hockeypuck/ratelimit"
+	"hockeypuck/ratelimit/backend/memory"
+	"hockeypuck/ratelimit/backend/redis"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -35,7 +38,7 @@ type Server struct {
 	sksPeer         *sks.Peer
 	logWriter       io.WriteCloser
 	metricsListener *metrics.Metrics
-	rateLimiter     *RateLimiter
+	rateLimiter     *ratelimit.RateLimiter
 
 	t                 tomb.Tomb
 	hkpAddr, hkpsAddr string
@@ -111,8 +114,12 @@ func NewServer(settings *Settings) (*Server, error) {
 
 	s.middle = interpose.New()
 
+	// Register rate limiting backends
+	ratelimit.RegisterMemoryBackend(memory.MemoryBackendConstructor)
+	ratelimit.RegisterRedisBackend(redis.RedisBackendConstructor)
+
 	// Initialize rate limiter with partner provider for keyserver sync exemptions
-	s.rateLimiter, err = NewRateLimiterWithPartners(&settings.RateLimit, s.sksPeer)
+	s.rateLimiter, err = ratelimit.NewWithPartners(&settings.RateLimit, s.sksPeer)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -383,7 +390,6 @@ func (s *Server) stats(req *http.Request) (interface{}, error) {
 	// Add rate limiting statistics
 	if s.rateLimiter != nil {
 		rateLimitStats := s.rateLimiter.GetRateLimitStats()
-		rateLimitStats["tor"] = s.rateLimiter.GetTorExitStats()
 		result.RateLimit = rateLimitStats
 	}
 
