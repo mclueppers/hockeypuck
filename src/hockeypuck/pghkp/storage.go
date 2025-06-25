@@ -80,7 +80,7 @@ keywords tsvector
 	// For seamless migration, we use NOT NULL DEFAULT so that existing records get populated.
 	// Then we immediately DROP DEFAULT to force future records to be set explicitly.
 	`ALTER TABLE keys ADD idxtime
-TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00'`,
+TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00Z'`,
 	`ALTER TABLE keys ALTER idxtime
 DROP DEFAULT`,
 	// subkeys is always created with its initial two columns.
@@ -280,6 +280,7 @@ SELECT rfingerprint, rsubfp FROM subkeys_checked
 `
 
 // bulkTxReindexKeys is the query for updating the SQL schema only, from a temporary table to the DB.
+// We require that both the fingerprint and md5 match, to prevent race conditions.
 const bulkTxReindexKeys string = `UPDATE keys FROM keys_copyin
 SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords 
 WHERE keys.rfingerprint = keys_copyin.rfingerprint AND keys.md5 = keys_copyin.md5
@@ -1160,23 +1161,19 @@ func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result
 	return unprocessed, ok
 }
 
-func (st *storage) bulkDropTempTables() (err error) {
+func (st *storage) bulkDropTempTables() error {
 	// Drop the 2 pairs (all) of temporary tables
-	for _, drTableSQL := range drTempTablesSQL {
-		_, err := st.Exec(drTableSQL)
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	err := st.bulkExecSingleTx(drTempTablesSQL, sqlDesc(drTempTablesSQL))
+	if err != nil {
+		return errors.WithStack(err)
 	}
 	return nil
 }
 
-func (st *storage) bulkCreateTempTables() (err error) {
-	for _, crTableSQL := range crTempTablesSQL {
-		_, err := st.Exec(crTableSQL)
-		if err != nil {
-			return errors.Wrap(err, "cannot drop temporary tables")
-		}
+func (st *storage) bulkCreateTempTables() error {
+	err := st.bulkExecSingleTx(crTempTablesSQL, sqlDesc(crTempTablesSQL))
+	if err != nil {
+		return errors.Wrap(err, "cannot drop temporary tables")
 	}
 	return nil
 }
