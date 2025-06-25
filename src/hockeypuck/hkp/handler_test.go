@@ -42,7 +42,7 @@ import (
 type testKey struct {
 	fp   string
 	rfp  string
-	sid  string
+	kid  string
 	file string
 }
 
@@ -50,31 +50,31 @@ var (
 	testKeyDefault = &testKey{
 		fp:   "10fe8cf1b483f7525039aa2a361bc1f023e0dcca",
 		rfp:  "accd0e320f1cb163a2aa9305257f384b1fc8ef01",
-		sid:  "23e0dcca",
+		kid:  "361bc1f023e0dcca",
 		file: "alice_signed.asc",
 	}
 	testKeyBadSigs = &testKey{
 		fp:   "a7400f5a48fb42b8cee8638b5759f35001aa4a64",
 		rfp:  "46a4aa10053f9575b8368eec8b24bf84a5f0047a",
-		sid:  "01aa4a64",
+		kid:  "5759f35001aa4a64",
 		file: "a7400f5a_badsigs.asc",
 	}
 	testKeyGentoo = &testKey{
 		fp:   "abd00913019d6354ba1d9a132839fe0d796198b1",
 		rfp:  "1b891697d0ef938231a9d1ab4536d91031900dba",
-		sid:  "796198b1",
+		kid:  "2839fe0d796198b1",
 		file: "gentoo-l1.asc",
 	}
 	testKeyRevoked = &testKey{
 		fp:   "2d4b859915bf2213880748ae7c330458a06e162f",
 		rfp:  "f261e60a854033c7ea8470883122fb519958b4d2",
-		sid:  "a06e162f",
+		kid:  "7c330458a06e162f",
 		file: "test-key-revoked.asc",
 	}
 	testKeyUidRevoked = &testKey{
 		fp:   "9a86c636b3f0f94ec6b42e6bebed28c0696c022c",
 		rfp:  "c220c6960c82debeb6e24b6ce49f0f3b636c68a9",
-		sid:  "636c68a9",
+		kid:  "ebed28c0696c022c",
 		file: "test-key-uid-revoked.asc",
 	}
 
@@ -140,7 +140,7 @@ func (s *HandlerSuite) TearDownTest(c *gc.C) {
 func (s *HandlerSuite) TestGetKeyID(c *gc.C) {
 	tk := testKeyDefault
 
-	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x" + tk.sid)
+	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x" + tk.kid)
 	c.Assert(err, gc.IsNil)
 	armor, err := io.ReadAll(res.Body)
 	res.Body.Close()
@@ -149,7 +149,7 @@ func (s *HandlerSuite) TestGetKeyID(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].ShortID(), gc.Equals, tk.sid)
+	c.Assert(keys[0].KeyID(), gc.Equals, tk.kid)
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "alice <alice@example.com>")
 
@@ -190,7 +190,7 @@ func (s *HandlerSuite) TestIndexAlice(c *gc.C) {
 	tk := testKeyDefault
 
 	for _, op := range []string{"index", "vindex"} {
-		res, err := http.Get(fmt.Sprintf("%s/pks/lookup?op=%s&search=0x"+tk.sid, s.srv.URL, op))
+		res, err := http.Get(fmt.Sprintf("%s/pks/lookup?op=%s&search=0x"+tk.kid, s.srv.URL, op))
 		c.Assert(err, gc.IsNil)
 		doc, err := io.ReadAll(res.Body)
 		res.Body.Close()
@@ -221,7 +221,7 @@ func (s *HandlerSuite) TestIndexAlice(c *gc.C) {
 func (s *HandlerSuite) TestIndexAliceMR(c *gc.C) {
 	tk := testKeyDefault
 
-	res, err := http.Get(fmt.Sprintf("%s/pks/lookup?op=vindex&options=mr&search=0x"+tk.sid, s.srv.URL))
+	res, err := http.Get(fmt.Sprintf("%s/pks/lookup?op=vindex&options=mr&search=0x"+tk.kid, s.srv.URL))
 	c.Assert(err, gc.IsNil)
 	doc, err := io.ReadAll(res.Body)
 	res.Body.Close()
@@ -330,7 +330,7 @@ func (s *HandlerSuite) TestFetchWithBadSigs(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].ShortID(), gc.Equals, tk.sid)
+	c.Assert(keys[0].KeyID(), gc.Equals, tk.kid)
 }
 
 func (s *HandlerSuite) SetupHashQueryTest(c *gc.C, unique bool, digests ...int) (*httptest.ResponseRecorder, *http.Request) {

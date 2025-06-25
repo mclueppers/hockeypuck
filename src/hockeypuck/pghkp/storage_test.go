@@ -105,13 +105,13 @@ func (s *S) addKey(c *gc.C, keyname string) {
 }
 
 func (s *S) queryAllKeys(c *gc.C) []*keyDoc {
-	rows, err := s.db.Query("SELECT rfingerprint, ctime, mtime, md5, doc FROM keys")
+	rows, err := s.db.Query("SELECT rfingerprint, ctime, mtime, idxtime, md5, doc FROM keys")
 	c.Assert(err, gc.IsNil)
 	defer rows.Close()
 	var result []*keyDoc
 	for rows.Next() {
 		var doc keyDoc
-		err = rows.Scan(&doc.RFingerprint, &doc.CTime, &doc.MTime, &doc.MD5, &doc.Doc)
+		err = rows.Scan(&doc.RFingerprint, &doc.CTime, &doc.MTime, &doc.IdxTime, &doc.MD5, &doc.Doc)
 		c.Assert(err, gc.IsNil)
 		result = append(result, &doc)
 	}
@@ -150,7 +150,7 @@ func (s *S) TestMD5(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].ShortID(), gc.Equals, "ce353cf4")
+	c.Assert(keys[0].KeyID(), gc.Equals, "cc5112bdce353cf4")
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "Jenny Ondioline <jennyo@transient.net>")
 }
@@ -172,7 +172,7 @@ func (s *S) TestAddDuplicates(c *gc.C) {
 }
 
 func (s *S) TestResolve(c *gc.C) {
-	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x44a2d1db")
+	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0xf79362da44a2d1db")
 	c.Assert(err, gc.IsNil)
 	res.Body.Close()
 	c.Assert(err, gc.IsNil)
@@ -182,12 +182,12 @@ func (s *S) TestResolve(c *gc.C) {
 
 	keyDocs := s.queryAllKeys(c)
 	c.Assert(keyDocs, gc.HasLen, 1)
-	c.Assert(keyDocs[0].assertParse(c).ShortKeyID, gc.Equals, "44a2d1db")
+	c.Assert(keyDocs[0].assertParse(c).LongKeyID, gc.Equals, "f79362da44a2d1db")
 
 	// Should match
 	for _, search := range []string{
-		// short, long and full fingerprint key IDs match
-		"0x44a2d1db", "0xf79362da44a2d1db", "0x81279eee7ec89fb781702adaf79362da44a2d1db",
+		// key ID and fingerprint match
+		"0xf79362da44a2d1db", "0x81279eee7ec89fb781702adaf79362da44a2d1db",
 
 		// subkeys
 		"0xdb769d16cdb9ad53", "0xe9ebaf4195c1826c", "0x6cdc23d76cba8ca9",
@@ -214,7 +214,7 @@ func (s *S) TestResolve(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].ShortID(), gc.Equals, "44a2d1db")
+		c.Assert(keys[0].KeyID(), gc.Equals, "f79362da44a2d1db")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 2)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "Casey Marshall <casey.marshall@gazzang.com>")
 	}
@@ -232,7 +232,7 @@ func (s *S) TestResolve(c *gc.C) {
 }
 
 func (s *S) TestResolveWithHyphen(c *gc.C) {
-	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x2632c2c3")
+	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x3287f5a32632c2c3")
 	c.Assert(err, gc.IsNil)
 	res.Body.Close()
 	c.Assert(err, gc.IsNil)
@@ -242,12 +242,12 @@ func (s *S) TestResolveWithHyphen(c *gc.C) {
 
 	keyDocs := s.queryAllKeys(c)
 	c.Assert(keyDocs, gc.HasLen, 1)
-	c.Assert(keyDocs[0].assertParse(c).ShortKeyID, gc.Equals, "2632c2c3")
+	c.Assert(keyDocs[0].assertParse(c).LongKeyID, gc.Equals, "3287f5a32632c2c3")
 
 	// Should match
 	for _, search := range []string{
-		// short, long and full fingerprint key IDs match
-		"0x2632c2c3", "0x3287f5a32632c2c3", "0x68d1b3d8b76c50f7c97038393287f5a32632c2c3",
+		// key ID and fingerprint match
+		"0x3287f5a32632c2c3", "0x68d1b3d8b76c50f7c97038393287f5a32632c2c3",
 
 		// contiguous words, usernames, domains and email addresses match
 		"steven", "steven-12345", "Test", "Encryption", "Test+Encryption", "TeSt+EnCrYpTiOn",
@@ -265,7 +265,7 @@ func (s *S) TestResolveWithHyphen(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].ShortID(), gc.Equals, "2632c2c3")
+		c.Assert(keys[0].KeyID(), gc.Equals, "3287f5a32632c2c3")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "steven-12345 (Test Encryption) <steven-test@example.com>")
 	}
@@ -283,7 +283,7 @@ func (s *S) TestResolveWithHyphen(c *gc.C) {
 }
 
 func (s *S) TestResolveBareEmail(c *gc.C) {
-	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x573f7c77")
+	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0xa4eb82d2573f7c77")
 	c.Assert(err, gc.IsNil)
 	res.Body.Close()
 	c.Assert(err, gc.IsNil)
@@ -293,12 +293,12 @@ func (s *S) TestResolveBareEmail(c *gc.C) {
 
 	keyDocs := s.queryAllKeys(c)
 	c.Assert(keyDocs, gc.HasLen, 1)
-	c.Assert(keyDocs[0].assertParse(c).ShortKeyID, gc.Equals, "573f7c77")
+	c.Assert(keyDocs[0].assertParse(c).LongKeyID, gc.Equals, "a4eb82d2573f7c77")
 
 	// Should match
 	for _, search := range []string{
-		// short, long and full fingerprint key IDs match
-		"0x573f7c77", "0xa4eb82d2573f7c77", "0x9671c8185c6519abb4e8ad9fa4eb82d2573f7c77",
+		// key ID and fingerprint match
+		"0xa4eb82d2573f7c77", "0x9671c8185c6519abb4e8ad9fa4eb82d2573f7c77",
 
 		// subkeys
 		"0x21b4ba25958075da",
@@ -321,7 +321,7 @@ func (s *S) TestResolveBareEmail(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].ShortID(), gc.Equals, "573f7c77")
+		c.Assert(keys[0].KeyID(), gc.Equals, "a4eb82d2573f7c77")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "support@posteo.de")
 	}
@@ -354,7 +354,7 @@ func (s *S) TestMerge(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].ShortID(), gc.Equals, "23e0dcca")
+	c.Assert(keys[0].KeyID(), gc.Equals, "361bc1f023e0dcca")
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	c.Assert(keys[0].UserIDs[0].Signatures, gc.HasLen, 2)
 }
@@ -374,7 +374,7 @@ func (s *S) TestPolicyURI(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].ShortID(), gc.Equals, "e21f705a")
+	c.Assert(keys[0].KeyID(), gc.Equals, "422c9066e21f705a")
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	// this shouldn't actually care WHICH signature the policy URI is at in the same way.
 	c.Assert(keys[0].UserIDs[0].Signatures[2].IssuerKeyID(), gc.Equals, "2839fe0d796198b1")
@@ -384,10 +384,9 @@ func (s *S) TestPolicyURI(c *gc.C) {
 func (s *S) TestEd25519(c *gc.C) {
 	s.addKey(c, "e68e311d.asc")
 
-	// Should match, even if we don't fully support eddsa yet.
 	for _, search := range []string{
-		// short, long and full fingerprint key IDs match
-		"0xe68e311d", "0x8d7c6b1a49166a46ff293af2d4236eabe68e311d",
+		// long key ID and fingerprint match
+		"0xd4236eabe68e311d", "0x8d7c6b1a49166a46ff293af2d4236eabe68e311d",
 		// contiguous words and email addresses match
 		"casey", "marshall", "casey+marshall", "cAseY+MArSHaLL",
 		"cmars@cmarstech.com", "casey.marshall@canonical.com"} {
@@ -401,7 +400,7 @@ func (s *S) TestEd25519(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].ShortID(), gc.Equals, "e68e311d")
+		c.Assert(keys[0].KeyID(), gc.Equals, "d4236eabe68e311d")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 2)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "Casey Marshall <casey.marshall@canonical.com>")
 	}
