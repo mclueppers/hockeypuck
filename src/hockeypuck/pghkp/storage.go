@@ -79,7 +79,7 @@ keywords tsvector
 )`,
 	// For seamless migration, we use NOT NULL DEFAULT so that existing records get populated.
 	// Then we immediately DROP DEFAULT to force future records to be set explicitly.
-	`ALTER TABLE keys ADD idxtime
+	`ALTER TABLE keys ADD IF NOT EXISTS idxtime
 TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00Z'`,
 	`ALTER TABLE keys ALTER idxtime
 DROP DEFAULT`,
