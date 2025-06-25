@@ -281,8 +281,8 @@ SELECT rfingerprint, rsubfp FROM subkeys_checked
 
 // bulkTxReindexKeys is the query for updating the SQL schema only, from a temporary table to the DB.
 // We require that both the fingerprint and md5 match, to prevent race conditions.
-const bulkTxReindexKeys string = `UPDATE keys FROM keys_copyin
-SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords 
+const bulkTxReindexKeys string = `UPDATE keys
+SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords FROM keys_copyin
 WHERE keys.rfingerprint = keys_copyin.rfingerprint AND keys.md5 = keys_copyin.md5
 `
 
@@ -317,6 +317,8 @@ EXISTS (SELECT 1 FROM subkeys_checked WHERE subkeys_checked.rfingerprint = keys_
 const bulkInsertedKeysNum string = `SELECT COUNT (*) FROM keys_checked
 `
 const bulkInsertedSubkeysNum string = `SELECT COUNT (*) FROM subkeys_checked
+`
+const bulkCopiedKeysNum string = `SELECT COUNT (*) FROM keys_copyin
 `
 
 const bulkInsQueryKeyChange string = `SELECT md5 FROM keys_checked
@@ -1188,20 +1190,18 @@ func (st *storage) BulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 	if err != nil {
 		// This should always be possible (maybe, out-of-memory?)
 		result.Errors = append(result.Errors, err)
-		st.bulkDropTempTables()
 		return 0, false
 	}
+	defer st.bulkDropTempTables()
 	keysWithNulls, subkeysWithNulls, ok := 0, 0, true
 	maxDups, minDups, keysInserted, subkeysInserted := 0, 0, 0, 0
 	// (a): Send *all* keys to in-mem tables on the pg server; *no constraints checked*
 	if _, ok = st.bulkInsertCopyKeysToServer(keys, result); !ok {
-		st.bulkDropTempTables()
 		return 0, false
 	}
 	// (b): From _copyin tables (still only to in-mem table) remove duplicates
 	//      check *all* constraints & RollBack insertions of key/subkeys that err
 	if keysWithNulls, subkeysWithNulls, ok = st.bulkInsertCheckedKeysSubkeys(result); !ok {
-		st.bulkDropTempTables()
 		return 0, false
 	}
 
@@ -1581,7 +1581,7 @@ func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.Inser
 					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
 			insTime = insTime[:i+1] // re-slice +1
 			insTime[i] = time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, keyDocs[idx].RFingerprint, "",
+			keysValueArgs = append(keysValueArgs, keyDocs[idx].RFingerprint, "{}",
 				insTime[i], insTime[i], insTime[i], keyDocs[idx].MD5, keyDocs[idx].Keywords)
 
 		}
@@ -1601,7 +1601,7 @@ func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.Inser
 
 func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 	var keysReindexed int
-	err := st.QueryRow(bulkInsertedKeysNum).Scan(&keysReindexed)
+	err := st.QueryRow(bulkCopiedKeysNum).Scan(&keysReindexed)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warn("Error querying keys reindexed. Stats may be inaccurate.")
@@ -1622,21 +1622,19 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 }
 
 func (st *storage) BulkReindex(keyDocs []*keyDoc, result *hkpstorage.InsertError) (int, bool) {
-	log.Infof("Attempting bulk reindex of keys")
+	log.Infof("Attempting bulk reindex of %d keys", len(keyDocs))
 	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
 	err := st.bulkCreateTempTables()
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		st.bulkDropTempTables()
 		return 0, false
 	}
+	defer st.bulkDropTempTables()
 	keysReindexed := 0
 	if !st.bulkReindexDoCopy(keyDocs, result) {
-		st.bulkDropTempTables()
 		return 0, false
 	}
-	if st.bulkReindexKeys(result) {
-		st.bulkDropTempTables()
+	if !st.bulkReindexKeys(result) {
 		return 0, false
 	}
 
@@ -1648,40 +1646,47 @@ func (st *storage) BulkReindex(keyDocs []*keyDoc, result *hkpstorage.InsertError
 	return keysReindexed, true
 }
 
-func (st *storage) reindexBunch(bookmark time.Time) (time.Time, error) {
+func (st *storage) reindexBunch(bookmark *time.Time) (finished bool, err error) {
 	// Processes a bunch of keys, normalises the table schema, and writes them back out to the DB.
 	// It does not update CTime, MTime, MD5 or Doc, and does not call Notify.
 	// It *does* update IdxTime and Keywords.
 
 	t := time.Now()
-	newBookmark := bookmark
+	newBookmark := *bookmark
+	finished = false
+	err = nil
 	newKeyDocs := make([]*keyDoc, 0, keysInBunch)
 	for {
 		// ModifiedSince uses LIMIT, so this is safe
 		rfps, err := st.ModifiedSince(newBookmark)
 		if err != nil {
-			return bookmark, err
+			return false, err
+		}
+		if len(rfps) == 0 {
+			finished = true
+			break
 		}
 		keyDocs, err := st.fetchKeydocs(rfps)
 		if err != nil {
-			return bookmark, err
+			return false, err
 		}
+		log.Infof("reindexing %d records", len(keyDocs))
 		for _, kd := range keyDocs {
 			changed := false
 			// Unmarshal the doc
-			var pk openpgp.PrimaryKey
+			var pk jsonhkp.PrimaryKey
 			err = json.Unmarshal([]byte(kd.Doc), &pk)
 			if err != nil {
-				return bookmark, errors.WithStack(err)
+				return false, errors.WithStack(err)
 			}
-
-			// TODO:
-			// Populate Fingerprint, KeyID if empty (issue #285)
-
+			rfp := openpgp.Reverse(pk.Fingerprint)
+			key, err := readOneKey(pk.Bytes(), rfp)
+			if err != nil {
+				return false, errors.WithStack(err)
+			}
 			// Regenerate keywords
-			keywords := keywordsTSVector(&pk)
+			keywords := keywordsTSVector(key)
 			// Note that the TSVector is NOT stable re sort ordering of UserIDs
-			// And this comparison probably won't work anyway...
 			if kd.Keywords != keywords {
 				kd.Keywords = keywords
 				changed = true
@@ -1702,18 +1707,20 @@ func (st *storage) reindexBunch(bookmark time.Time) (time.Time, error) {
 	n, bulkOK := st.BulkReindex(newKeyDocs, &result)
 	if !bulkOK {
 		if count, max := len(result.Errors), maxInsertErrors; count > max {
-			return newBookmark, errors.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
+			return finished, errors.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
 		}
 	}
 
 	log.Infof("%d keys reindexed in %v", n, time.Since(t))
-
-	return newBookmark, nil
+	bookmark = &newBookmark
+	return finished, nil
 }
 
 func (st *storage) reindex() error {
 	// A goroutine that reindexes the keydb in-place, oldest items first.
 	bookmark := time.Time{}
+	var finished bool
+	var err error
 	for {
 		select {
 		case <-st.t.Dying():
@@ -1721,11 +1728,13 @@ func (st *storage) reindex() error {
 		default:
 		}
 
-		var err error
-		bookmark, err = st.reindexBunch(bookmark)
+		finished, err = st.reindexBunch(&bookmark)
 		if err != nil {
 			log.Errorf("reindexing stopped: %v", err)
 			return err
+		}
+		if finished {
+			return nil
 		}
 	}
 }

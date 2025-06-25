@@ -91,7 +91,7 @@ func (s *S) TearDownTest(c *gc.C) {
 	s.PGSuite.TearDownTest(c)
 }
 
-func (s *S) addKey(c *gc.C, keyname string) {
+func (s *S) addKey(c *gc.C, keyname string) []byte {
 	keytext, err := io.ReadAll(testing.MustInput(keyname))
 	c.Assert(err, gc.IsNil)
 	res, err := http.PostForm(s.srv.URL+"/pks/add", url.Values{
@@ -100,8 +100,9 @@ func (s *S) addKey(c *gc.C, keyname string) {
 	c.Assert(err, gc.IsNil)
 	c.Assert(res.StatusCode, gc.Equals, http.StatusOK)
 	defer res.Body.Close()
-	_, err = io.ReadAll(res.Body)
+	data, err := io.ReadAll(res.Body)
 	c.Assert(err, gc.IsNil)
+	return data
 }
 
 func (s *S) queryAllKeys(c *gc.C) []*keyDoc {
@@ -547,37 +548,42 @@ func (s *S) TestDeleteWithAdminSig(c *gc.C) {
 }
 
 func (s *S) TestAddBareRevocation(c *gc.C) {
-	keytext, err := io.ReadAll(testing.MustInput("test-key.asc"))
-	c.Assert(err, gc.IsNil)
-	res, err := http.PostForm(s.srv.URL+"/pks/add", url.Values{
-		"keytext": []string{string(keytext)},
-	})
-	c.Assert(err, gc.IsNil)
-	c.Assert(res.StatusCode, gc.Equals, http.StatusOK)
-	defer res.Body.Close()
-	doc, err := io.ReadAll(res.Body)
-	c.Assert(err, gc.IsNil)
-
+	s.addKey(c, "test-key.asc")
+	doc := s.addKey(c, "test-key-revoke.asc")
 	var addRes hkp.AddResponse
-	err = json.Unmarshal(doc, &addRes)
-	c.Assert(err, gc.IsNil)
-	c.Assert(addRes.Inserted, gc.HasLen, 1)
-
-	keytext, err = io.ReadAll(testing.MustInput("test-key-revoke.asc"))
-	c.Assert(err, gc.IsNil)
-
-	res2, err := http.PostForm(s.srv.URL+"/pks/add", url.Values{
-		"keytext": []string{string(keytext)},
-	})
-	c.Assert(err, gc.IsNil)
-	c.Assert(res.StatusCode, gc.Equals, http.StatusOK)
-	defer res2.Body.Close()
-	doc, err = io.ReadAll(res2.Body)
-	c.Assert(err, gc.IsNil)
-	err = json.Unmarshal(doc, &addRes)
+	err := json.Unmarshal(doc, &addRes)
 	c.Assert(err, gc.IsNil)
 	c.Assert(addRes.Inserted, gc.HasLen, 0)
 	c.Assert(addRes.Updated, gc.HasLen, 1)
+}
+
+func (s *S) TestReindex(c *gc.C) {
+	s.addKey(c, "e68e311d.asc")
+
+	// Now reset the keywords column of the test key's DB record
+	_, err := s.storage.Exec(`UPDATE keys SET keywords = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	c.Assert(err, gc.IsNil)
+
+	// Check that Casey's key is no longer indexed
+	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey.marshall@canonical.com")
+	c.Assert(err, gc.IsNil)
+	res.Body.Close()
+	c.Assert(err, gc.IsNil)
+	c.Assert(res.StatusCode, gc.Equals, http.StatusNotFound)
+
+	err = s.storage.reindex()
+	c.Assert(err, gc.IsNil)
+	keydocs, err := s.storage.fetchKeydocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	c.Assert(err, gc.IsNil)
+	c.Assert(keydocs, gc.HasLen, 1)
+	c.Assert(keydocs[0].Keywords, gc.Not(gc.Equals), "")
+
+	// Check that Casey's key is indexed again
+	res, err = http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey.marshall@canonical.com")
+	c.Assert(err, gc.IsNil)
+	res.Body.Close()
+	c.Assert(err, gc.IsNil)
+	c.Assert(res.StatusCode, gc.Equals, http.StatusOK)
 }
 
 func (s *S) TestPKS(c *gc.C) {
