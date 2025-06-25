@@ -60,16 +60,33 @@ type storage struct {
 
 var _ hkpstorage.Storage = (*storage)(nil)
 
+// These are necessary for array unrolling in the bulk update routines below.
+// They MUST match the table definitions here.
+const keysNumColumns = 7
+const subkeysNumColumns = 2
+
 var crTablesSQL = []string{
-	`CREATE TABLE IF NOT EXISTS keys (
+	// keys is always created with its initial six columns.
+	// Additional columns should be defined using ALTER TABLE to enable seamless migration.
+	`CREATE TABLE IF NOT EXISTS keys
+(
 rfingerprint TEXT NOT NULL PRIMARY KEY,
 doc jsonb NOT NULL,
-ctime TIMESTAMP WITH TIME ZONE NOT NULL,
-mtime TIMESTAMP WITH TIME ZONE NOT NULL,
+ctime TIMESTAMPTZ NOT NULL,
+mtime TIMESTAMPTZ NOT NULL,
 md5 TEXT NOT NULL UNIQUE,
 keywords tsvector
 )`,
-	`CREATE TABLE IF NOT EXISTS subkeys (
+	// For seamless migration, we use NOT NULL DEFAULT so that existing records get populated.
+	// Then we immediately DROP DEFAULT to force future records to be set explicitly.
+	`ALTER TABLE keys ADD idxtime
+TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00'`,
+	`ALTER TABLE keys ALTER idxtime
+DROP DEFAULT`,
+	// subkeys is always created with its initial two columns.
+	// Additional columns should be defined using ALTER TABLE to enable seamless migration.
+	`CREATE TABLE IF NOT EXISTS subkeys
+(
 rfingerprint TEXT NOT NULL,
 rsubfp TEXT NOT NULL PRIMARY KEY,
 FOREIGN KEY (rfingerprint) REFERENCES keys(rfingerprint)
@@ -84,11 +101,18 @@ FOREIGN KEY (rfingerprint) REFERENCES keys(rfingerprint)
 }
 
 var crIndexesSQL = []string{
-	`CREATE INDEX IF NOT EXISTS keys_rfp ON keys(rfingerprint text_pattern_ops);`,
-	`CREATE INDEX IF NOT EXISTS keys_ctime ON keys(ctime);`,
-	`CREATE INDEX IF NOT EXISTS keys_mtime ON keys(mtime);`,
-	`CREATE INDEX IF NOT EXISTS keys_keywords ON keys USING gin(keywords);`,
-	`CREATE INDEX IF NOT EXISTS subkeys_rfp ON subkeys(rsubfp text_pattern_ops);`,
+	`CREATE INDEX IF NOT EXISTS keys_rfp
+ON keys(rfingerprint text_pattern_ops);`,
+	`CREATE INDEX IF NOT EXISTS keys_ctime
+ON keys(ctime);`,
+	`CREATE INDEX IF NOT EXISTS keys_mtime
+ON keys(mtime);`,
+	`CREATE INDEX IF NOT EXISTS keys_idxtime
+ON keys(idxtime);`,
+	`CREATE INDEX IF NOT EXISTS keys_keywords
+ON keys USING gin(keywords);`,
+	`CREATE INDEX IF NOT EXISTS subkeys_rfp
+ON subkeys(rsubfp text_pattern_ops);`,
 }
 
 var drConstraintsSQL = []string{
@@ -97,6 +121,7 @@ var drConstraintsSQL = []string{
 	`DROP INDEX keys_rfp;`,
 	`DROP INDEX keys_ctime;`,
 	`DROP INDEX keys_mtime;`,
+	`DROP INDEX keys_idxtime;`,
 	`DROP INDEX keys_keywords;`,
 
 	`ALTER TABLE subkeys DROP CONSTRAINT subkeys_pk;`,
@@ -105,30 +130,36 @@ var drConstraintsSQL = []string{
 }
 
 var crTempTablesSQL = []string{
-	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_copyin (
+	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_copyin
+(
 rfingerprint TEXT,
 doc jsonb,
-ctime TIMESTAMP WITH TIME ZONE,
-mtime TIMESTAMP WITH TIME ZONE,
+ctime TIMESTAMPTZ,
+mtime TIMESTAMPTZ,
+idxtime TIMESTAMPTZ,
 md5 TEXT,
 keywords tsvector
 )
 `,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS subkeys_copyin (
+	`CREATE TEMPORARY TABLE IF NOT EXISTS subkeys_copyin
+(
 rfingerprint TEXT,
 rsubfp TEXT
 )
 `,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_checked (
+	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_checked
+(
 rfingerprint TEXT NOT NULL PRIMARY KEY,
 doc jsonb NOT NULL,
-ctime TIMESTAMP WITH TIME ZONE NOT NULL,
-mtime TIMESTAMP WITH TIME ZONE NOT NULL,
+ctime TIMESTAMPTZ NOT NULL,
+mtime TIMESTAMPTZ NOT NULL,
+idxtime TIMESTAMPTZ NOT NULL,
 md5 TEXT NOT NULL UNIQUE,
 keywords tsvector
 )
 `,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS subkeys_checked (
+	`CREATE TEMPORARY TABLE IF NOT EXISTS subkeys_checked
+(
 rfingerprint TEXT NOT NULL,
 rsubfp TEXT NOT NULL PRIMARY KEY
 )
@@ -150,9 +181,9 @@ var drTempTablesSQL = []string{
 // Among all the keys in a call to Insert(..) (usually the keys in a processed key-dump file), this
 // filter gets the unique keys, i.e., those with unique rfingerprint *and* unique md5, but *neither*
 // with rfingerprint *nor* with md5 that currently exist in the DB.
-const bulkTxFilterUniqueKeys string = `INSERT INTO keys_checked (rfingerprint, doc, ctime, mtime, md5, keywords) 
-SELECT rfingerprint, doc, ctime, mtime, md5, keywords FROM keys_copyin kcpinA WHERE 
-rfingerprint IS NOT NULL AND doc IS NOT NULL AND ctime IS NOT NULL AND mtime IS NOT NULL AND md5 IS NOT NULL AND 
+const bulkTxFilterUniqueKeys string = `INSERT INTO keys_checked (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) 
+SELECT rfingerprint, doc, ctime, mtime, idxtime, md5, keywords FROM keys_copyin kcpinA WHERE 
+rfingerprint IS NOT NULL AND doc IS NOT NULL AND ctime IS NOT NULL AND mtime IS NOT NULL AND idxtime IS NOT NULL AND md5 IS NOT NULL AND 
 (SELECT COUNT (*) FROM keys_copyin kcpinB WHERE kcpinB.rfingerprint = kcpinA.rfingerprint OR 
                                                 kcpinB.md5          = kcpinA.md5) = 1 AND 
 NOT EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = kcpinA.rfingerprint OR keys.md5 = kcpinA.md5)
@@ -164,7 +195,7 @@ NOT EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = kcpinA.rfingerprint OR 
 // by dropping keys previously set aside by bulkTxFilterUniqueKeys query and removing any tuples
 // with NULLs.
 const bulkTxPrepKeyStats string = `DELETE FROM keys_copyin WHERE 
-rfingerprint IS NULL OR doc IS NULL OR ctime IS NULL OR mtime IS NULL OR md5 IS NULL OR 
+rfingerprint IS NULL OR doc IS NULL OR ctime IS NULL OR mtime IS NULL OR idxtime IS NULL OR md5 IS NULL OR 
 EXISTS (SELECT 1 FROM keys_checked WHERE keys_checked.rfingerprint = keys_copyin.rfingerprint)
 `
 
@@ -176,8 +207,8 @@ const bulkTxFilterDupKeys string =
 // *** ctid field is PostgreSQL-specific; Oracle has ROWID equivalent field ***
 // ===> If there are different md5 for same rfp, this query allows them into keys_checked: <===
 // ===>  ***  an intentional error of non-unique rfp, to revert to normal insertion!  ***  <===
-`INSERT INTO keys_checked (rfingerprint, doc, ctime, mtime, md5, keywords) 
-SELECT rfingerprint, doc, ctime, mtime, md5, keywords FROM keys_copyin WHERE 
+`INSERT INTO keys_checked (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) 
+SELECT rfingerprint, doc, ctime, mtime, idxtime, md5, keywords FROM keys_copyin WHERE 
 ( ctid IN 
      (SELECT ctid FROM 
         (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY rfingerprint ORDER BY ctid) rfpEnum FROM keys_copyin) AS dupRfpTAB 
@@ -238,20 +269,26 @@ NOT EXISTS (SELECT 1 FROM subkeys WHERE subkeys.rsubfp = subkeys_copyin.rsubfp) 
   EXISTS (SELECT 1 FROM keys_copyin  WHERE keys_copyin.rfingerprint  = subkeys_copyin.rfingerprint) )
 `
 
-// bulkTxInsertKeys is the query for final bulk key insertion, from a tmporary table to the DB.
-const bulkTxInsertKeys string = `INSERT INTO keys (rfingerprint, doc, ctime, mtime, md5, keywords) 
-SELECT rfingerprint, doc, ctime, mtime, md5, keywords FROM keys_checked
+// bulkTxInsertKeys is the query for final bulk key insertion, from a temporary table to the DB.
+const bulkTxInsertKeys string = `INSERT INTO keys (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) 
+SELECT rfingerprint, doc, ctime, mtime, idxtime, md5, keywords FROM keys_checked
 `
 
-// bulkTxInsertSubkeys is the query for final bulk subkey insertion, from a tmporary table to the DB.
+// bulkTxInsertSubkeys is the query for final bulk subkey insertion, from a temporary table to the DB.
 const bulkTxInsertSubkeys string = `INSERT INTO subkeys (rfingerprint, rsubfp) 
 SELECT rfingerprint, rsubfp FROM subkeys_checked
+`
+
+// bulkTxReindexKeys is the query for updating the SQL schema only, from a temporary table to the DB.
+const bulkTxReindexKeys string = `UPDATE keys FROM keys_copyin
+SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords 
+WHERE keys.rfingerprint = keys_copyin.rfingerprint AND keys.md5 = keys_copyin.md5
 `
 
 // Stats collection queries
 
 const bulkInsNumNullKeys string = `SELECT COUNT (*) FROM keys_copyin WHERE 
-rfingerprint IS NULL OR doc IS NULL OR ctime IS NULL OR mtime IS NULL OR md5 IS NULL
+rfingerprint IS NULL OR doc IS NULL OR ctime IS NULL OR mtime IS NULL OR idxtime IS NULL OR md5 IS NULL
 `
 const bulkInsNumNullSubkeys string = `SELECT COUNT (*) FROM subkeys_copyin WHERE 
 rfingerprint IS NULL OR rsubfp IS NULL
@@ -330,22 +367,29 @@ func New(db *sql.DB, options []openpgp.KeyReaderOption) (hkpstorage.Storage, err
 	return st, nil
 }
 
+// Convert up to the first newline of the input string to a space-free identifier.
+// Useful when we haven't created a statement array programmatically but still want pretty logs.
+func sqlDesc(in []string) (out []string) {
+	out = make([]string, 0, len(in))
+	for _, val := range in {
+		init, _, _ := strings.Cut(val, "\n")
+		out = append(out, strings.Replace(init, " ", "_", -1))
+	}
+	return
+}
+
 func (st *storage) createTables() error {
-	for _, crTableSQL := range crTablesSQL {
-		_, err := st.Exec(crTableSQL)
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	err := st.bulkExecSingleTx(crTablesSQL, sqlDesc(crTablesSQL))
+	if err != nil {
+		return errors.WithStack(err)
 	}
 	return nil
 }
 
 func (st *storage) createIndexes() error {
-	for _, crIndexSQL := range crIndexesSQL {
-		_, err := st.Exec(crIndexSQL)
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	err := st.bulkExecSingleTx(crIndexesSQL, sqlDesc(crIndexesSQL))
+	if err != nil {
+		return errors.WithStack(err)
 	}
 	return nil
 }
@@ -354,6 +398,7 @@ type keyDoc struct {
 	RFingerprint string
 	CTime        time.Time
 	MTime        time.Time
+	IdxTime      time.Time
 	MD5          string
 	Doc          string
 	Keywords     string
@@ -691,7 +736,7 @@ func (st *storage) fetchKeydocs(rfps []string) ([]*keyDoc, error) {
 		}
 		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
 	}
-	sqlStr := fmt.Sprintf("SELECT rfingerprint, doc, md5, ctime, mtime, keywords FROM keys WHERE rfingerprint IN (%s)", strings.Join(rfpIn, ","))
+	sqlStr := fmt.Sprintf("SELECT rfingerprint, doc, md5, ctime, mtime, idxtime, keywords FROM keys WHERE rfingerprint IN (%s)", strings.Join(rfpIn, ","))
 	rows, err := st.Query(sqlStr)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -701,7 +746,7 @@ func (st *storage) fetchKeydocs(rfps []string) ([]*keyDoc, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var kd keyDoc
-		err = rows.Scan(&kd.RFingerprint, &kd.Doc, &kd.MD5, &kd.CTime, &kd.MTime, &kd.Keywords)
+		err = rows.Scan(&kd.RFingerprint, &kd.Doc, &kd.MD5, &kd.CTime, &kd.MTime, &kd.IdxTime, &kd.Keywords)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, errors.WithStack(err)
 		}
@@ -789,8 +834,8 @@ func (st *storage) insertKey(key *openpgp.PrimaryKey) (needUpsert bool, retErr e
 }
 
 func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert bool, retErr error) {
-	stmt, err := tx.Prepare("INSERT INTO keys (rfingerprint, ctime, mtime, md5, doc, keywords) " +
-		"SELECT $1::TEXT, $2::TIMESTAMP, $3::TIMESTAMP, $4::TEXT, $5::JSONB, to_tsvector($6) " +
+	stmt, err := tx.Prepare("INSERT INTO keys (rfingerprint, ctime, mtime, idxtime, md5, doc, keywords) " +
+		"SELECT $1::TEXT, $2::TIMESTAMP, $3::TIMESTAMP, $4::TIMESTAMP, $5::TEXT, $6::JSONB, to_tsvector($7) " +
 		"WHERE NOT EXISTS (SELECT 1 FROM keys WHERE rfingerprint = $1)")
 	if err != nil {
 		return false, errors.WithStack(err)
@@ -815,7 +860,7 @@ func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert 
 
 	jsonStr := string(jsonBuf)
 	keywords := keywordsTSVector(key)
-	result, err := stmt.Exec(&key.RFingerprint, &now, &now, &key.MD5, &jsonStr, &keywords)
+	result, err := stmt.Exec(&key.RFingerprint, &now, &now, &now, &key.MD5, &jsonStr, &keywords)
 	if err != nil {
 		return false, errors.Wrapf(err, "cannot insert rfp=%q", key.RFingerprint)
 	}
@@ -874,7 +919,7 @@ func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (int, int,
 	return maxDups, minDups, keysInserted, subkeysInserted
 }
 
-func (st *storage) bulkInsertSingleTx(bulkJobString, jobDesc []string) (err error) {
+func (st *storage) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error) {
 	// In single transaction
 	tx, err := st.Begin()
 	if err != nil {
@@ -921,7 +966,7 @@ func (st *storage) bulkInsertCheckSubkeys(result *hkpstorage.InsertError) (nullT
 	// (3) Single-copy of in-file Dups but not in-DB Dups
 	txStrs := []string{bulkTxFilterUniqueSubkeys, bulkTxPrepSubkeyStats, bulkTxFilterDupSubkeys}
 	msgStrs := []string{"bulkTx-filter-unique-subkeys", "bulkTx-prep-subkeys-stats", "bulkTx-filter-dup-subkeys"}
-	err = st.bulkInsertSingleTx(txStrs, msgStrs)
+	err = st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		return 0, false
@@ -943,7 +988,7 @@ func (st *storage) bulkInsertCheckKeys(result *hkpstorage.InsertError) (n int, o
 	// (3) Insert single copy of in-file Duplicates, if they have no Duplicate in final keys table (in DB)
 	txStrs := []string{bulkTxFilterUniqueKeys, bulkTxPrepKeyStats, bulkTxFilterDupKeys}
 	msgStrs := []string{"bulkTx-filter-unique-keys", "bulkTx-prep-key-stats", "bulkTx-filter-dup-keys"}
-	err = st.bulkInsertSingleTx(txStrs, msgStrs)
+	err = st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		return 0, false
@@ -951,8 +996,7 @@ func (st *storage) bulkInsertCheckKeys(result *hkpstorage.InsertError) (n int, o
 	return numNulls, true
 }
 
-func (st *storage) bulkInsertCheckedKeysSubkeys(keys []*openpgp.PrimaryKey,
-	result *hkpstorage.InsertError) (nullKeys, nullSubkeys int, ok bool) {
+func (st *storage) bulkInsertCheckedKeysSubkeys(result *hkpstorage.InsertError) (nullKeys, nullSubkeys int, ok bool) {
 	keysOK, subkeysOK := true, true
 	// key batch-processing
 	if nullKeys, keysOK = st.bulkInsertCheckKeys(result); !keysOK {
@@ -967,7 +1011,7 @@ func (st *storage) bulkInsertCheckedKeysSubkeys(keys []*openpgp.PrimaryKey,
 	// Final batch-insertion in keys/subkeys tables without any checks: _must not_ give any errors
 	txStrs := []string{bulkTxInsertKeys, bulkTxInsertSubkeys}
 	msgStrs := []string{"bulkTx-insert-keys", "bulkTx-insert-subkeys"}
-	err := st.bulkInsertSingleTx(txStrs, msgStrs)
+	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		return 0, 0, false
@@ -1040,35 +1084,35 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
 		totKeyArgs, totSubkeyArgs := 0, 0
 		keysValueStrings := make([]string, 0, keysInBunch)
-		keysValueArgs := make([]interface{}, 0, keysInBunch*6) // *** must be less than 64k arguments ***
+		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
 		subkeysValueStrings := make([]string, 0, subkeysInBunch)
-		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*2) // *** must be less than 64k arguments ***
-		insTime := make([]time.Time, 0, keysInBunch)                 // stupid but anyway...
+		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
+		insTime := make([]time.Time, 0, keysInBunch)                                 // stupid but anyway...
 		for i, j := 0, 0; idx < lenKIA; idx, i = idx+1, i+1 {
 			lenSKIA := len(skeyInsArgs[idx])
-			totKeyArgs += 6
-			totSubkeyArgs += 2 * lenSKIA
-			if (totKeyArgs > keysInBunch*6) || (totSubkeyArgs > subkeysInBunch*2) {
-				totKeyArgs -= 6
-				totSubkeyArgs -= 2 * lenSKIA
+			totKeyArgs += keysNumColumns
+			totSubkeyArgs += subkeysNumColumns * lenSKIA
+			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
+				totKeyArgs -= keysNumColumns
+				totSubkeyArgs -= subkeysNumColumns * lenSKIA
 				break
 			}
 			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, to_tsvector($%d))",
-					i*6+1, i*6+2, i*6+3, i*6+4, i*6+5, i*6+6))
+				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, to_tsvector($%d))",
+					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
 			insTime = insTime[:i+1] // re-slice +1
 			insTime[i] = time.Now().UTC()
 			keysValueArgs = append(keysValueArgs, *keyInsArgs[idx].RFingerprint, *keyInsArgs[idx].jsonStrDoc,
-				insTime[i], insTime[i], *keyInsArgs[idx].MD5, *keyInsArgs[idx].keywords)
+				insTime[i], insTime[i], insTime[i], *keyInsArgs[idx].MD5, *keyInsArgs[idx].keywords)
 
 			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
-				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT)", j*2+1, j*2+2))
+				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2))
 				subkeysValueArgs = append(subkeysValueArgs,
 					*skeyInsArgs[idx][sidx].keyRFingerprint, *skeyInsArgs[idx][sidx].subkeyRFingerprint)
 			}
 		}
 		log.Debugf("Attempting bulk insertion of %d keys and a total of %d subkeys!", idx-lastIdx, totSubkeyArgs>>1)
-		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, md5, keywords) VALUES %s",
+		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) VALUES %s",
 			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
 		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp) VALUES %s",
 			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
@@ -1116,7 +1160,7 @@ func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result
 	return unprocessed, ok
 }
 
-func (st *storage) bulkInsertCleanUp() (err error) {
+func (st *storage) bulkDropTempTables() (err error) {
 	// Drop the 2 pairs (all) of temporary tables
 	for _, drTableSQL := range drTempTablesSQL {
 		_, err := st.Exec(drTableSQL)
@@ -1127,7 +1171,7 @@ func (st *storage) bulkInsertCleanUp() (err error) {
 	return nil
 }
 
-func (st *storage) bulkInsertCreateTempTables() (err error) {
+func (st *storage) bulkCreateTempTables() (err error) {
 	for _, crTableSQL := range crTempTablesSQL {
 		_, err := st.Exec(crTableSQL)
 		if err != nil {
@@ -1143,24 +1187,24 @@ func (st *storage) BulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 	// Create 2 pairs of _temporary_ (in-mem) tables:
 	// (a) keys_copyin, subkeys_copyin
 	// (b) keys_checked, subkeys_checked
-	err := st.bulkInsertCreateTempTables()
+	err := st.bulkCreateTempTables()
 	if err != nil {
 		// This should always be possible (maybe, out-of-memory?)
 		result.Errors = append(result.Errors, err)
-		st.bulkInsertCleanUp() // Drop temp tables IF EXIST
+		st.bulkDropTempTables()
 		return 0, false
 	}
 	keysWithNulls, subkeysWithNulls, ok := 0, 0, true
 	maxDups, minDups, keysInserted, subkeysInserted := 0, 0, 0, 0
 	// (a): Send *all* keys to in-mem tables on the pg server; *no constraints checked*
 	if _, ok = st.bulkInsertCopyKeysToServer(keys, result); !ok {
-		st.bulkInsertCleanUp() // Drop temp tables IF EXIST
+		st.bulkDropTempTables()
 		return 0, false
 	}
 	// (b): From _copyin tables (still only to in-mem table) remove duplicates
 	//      check *all* constraints & RollBack insertions of key/subkeys that err
-	if keysWithNulls, subkeysWithNulls, ok = st.bulkInsertCheckedKeysSubkeys(keys, result); !ok {
-		st.bulkInsertCleanUp() // Drop temp tables IF EXIST
+	if keysWithNulls, subkeysWithNulls, ok = st.bulkInsertCheckedKeysSubkeys(result); !ok {
+		st.bulkDropTempTables()
 		return 0, false
 	}
 
@@ -1179,7 +1223,7 @@ func (st *storage) BulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 			keysInserted, subkeysInserted, minDups, maxDups, keysWithNulls, subkeysWithNulls, time.Since(t))
 	}
 
-	err = st.bulkInsertCleanUp()
+	err = st.bulkDropTempTables()
 	if err != nil {
 		// Temporary tables with previous data may lead to errors,
 		// when attempting insertion of duplicates, in next file,
@@ -1352,9 +1396,9 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 		return errors.Wrapf(err, "cannot serialize rfp=%q", key.RFingerprint)
 	}
 	keywords := keywordsTSVector(key)
-	result, err := tx.Exec("UPDATE keys SET mtime = $1, md5 = $2, keywords = to_tsvector($3), doc = $4 "+
-		"WHERE md5 = $5",
-		&now, &key.MD5, &keywords, jsonBuf, lastMD5)
+	result, err := tx.Exec("UPDATE keys SET mtime = $1, idxtime = $2, md5 = $3, keywords = to_tsvector($4), doc = $5 "+
+		"WHERE md5 = $6",
+		&now, &now, &key.MD5, &keywords, jsonBuf, lastMD5)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -1522,26 +1566,114 @@ func (st *storage) RenotifyAll() error {
 	return st.BulkNotify("SELECT md5 FROM keys")
 }
 
+func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.InsertError) bool {
+	lenKIA := len(keyDocs)
+	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
+		totKeyArgs := 0
+		keysValueStrings := make([]string, 0, keysInBunch)
+		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns)
+		insTime := make([]time.Time, 0, keysInBunch)
+		for i := 0; idx < lenKIA; idx, i = idx+1, i+1 {
+			totKeyArgs += keysNumColumns
+			if totKeyArgs > keysInBunch*keysNumColumns {
+				totKeyArgs -= keysNumColumns
+				break
+			}
+			keysValueStrings = append(keysValueStrings,
+				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, to_tsvector($%d))",
+					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
+			insTime = insTime[:i+1] // re-slice +1
+			insTime[i] = time.Now().UTC()
+			keysValueArgs = append(keysValueArgs, keyDocs[idx].RFingerprint, "",
+				insTime[i], insTime[i], insTime[i], keyDocs[idx].MD5, keyDocs[idx].Keywords)
+
+		}
+		log.Debugf("Attempting bulk insertion of %d keys!", idx-lastIdx)
+		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) VALUES %s",
+			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
+
+		err := st.bulkInsertSendBunch(keystmt, "", keysValueArgs, nil)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			return false
+		}
+		log.Debugf("%d updates sent to DB...", idx-lastIdx)
+	}
+	return true
+}
+
+func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
+	var keysReindexed int
+	err := st.QueryRow(bulkInsertedKeysNum).Scan(&keysReindexed)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		log.Warn("Error querying keys reindexed. Stats may be inaccurate.")
+		keysReindexed = 0
+	}
+	return keysReindexed
+}
+
+func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
+	txStrs := []string{bulkTxReindexKeys}
+	msgStrs := []string{"bulkTx-reindex-keys"}
+	err := st.bulkExecSingleTx(txStrs, msgStrs)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		return false
+	}
+	return true
+}
+
+func (st *storage) BulkReindex(keyDocs []*keyDoc, result *hkpstorage.InsertError) (int, bool) {
+	log.Infof("Attempting bulk reindex of keys")
+	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
+	err := st.bulkCreateTempTables()
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		st.bulkDropTempTables()
+		return 0, false
+	}
+	keysReindexed := 0
+	if !st.bulkReindexDoCopy(keyDocs, result) {
+		st.bulkDropTempTables()
+		return 0, false
+	}
+	if st.bulkReindexKeys(result) {
+		st.bulkDropTempTables()
+		return 0, false
+	}
+
+	keysReindexed = st.bulkReindexGetStats(result)
+	err = st.bulkDropTempTables()
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+	}
+	return keysReindexed, true
+}
+
 func (st *storage) reindexBunch(bookmark time.Time) (time.Time, error) {
 	// Processes a bunch of keys, normalises the table schema, and writes them back out to the DB.
 	// It does not update CTime, MTime, MD5 or Doc, and does not call Notify.
+	// It *does* update IdxTime and Keywords.
 
+	t := time.Now()
 	newBookmark := bookmark
-	keyDocs := make([]*keyDoc, 0, 100)
+	newKeyDocs := make([]*keyDoc, 0, keysInBunch)
 	for {
+		// ModifiedSince uses LIMIT, so this is safe
 		rfps, err := st.ModifiedSince(newBookmark)
 		if err != nil {
 			return bookmark, err
 		}
-		docs, err := st.fetchKeydocs(rfps)
+		keyDocs, err := st.fetchKeydocs(rfps)
 		if err != nil {
 			return bookmark, err
 		}
-		for _, doc := range docs {
+		for _, kd := range keyDocs {
 			changed := false
 			// Unmarshal the doc
 			var pk openpgp.PrimaryKey
-			err = json.Unmarshal([]byte(doc.Doc), &pk)
+			err = json.Unmarshal([]byte(kd.Doc), &pk)
 			if err != nil {
 				return bookmark, errors.WithStack(err)
 			}
@@ -1553,24 +1685,31 @@ func (st *storage) reindexBunch(bookmark time.Time) (time.Time, error) {
 			keywords := keywordsTSVector(&pk)
 			// Note that the TSVector is NOT stable re sort ordering of UserIDs
 			// And this comparison probably won't work anyway...
-			if doc.Keywords != keywords {
-				doc.Keywords = keywords
+			if kd.Keywords != keywords {
+				kd.Keywords = keywords
 				changed = true
 			}
 
 			if !changed {
 				break
 			}
-			keyDocs = append(keyDocs, doc)
-			newBookmark = doc.MTime
+			newKeyDocs = append(newKeyDocs, kd)
+			newBookmark = kd.MTime
 		}
-		// We can afford to exceed keysInBunch because reindexing needs fewer parameters
-		if len(keyDocs) > keysInBunch {
+		if len(newKeyDocs) > keysInBunch-100 {
 			break
 		}
 	}
-	// TODO: Bulk update using keyDocs
-	// If any updates fail, assume it's due to a simultaneous update and ignore gracefully
+
+	result := hkpstorage.InsertError{}
+	n, bulkOK := st.BulkReindex(newKeyDocs, &result)
+	if !bulkOK {
+		if count, max := len(result.Errors), maxInsertErrors; count > max {
+			return newBookmark, errors.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
+		}
+	}
+
+	log.Infof("%d keys reindexed in %v", n, time.Since(t))
 
 	return newBookmark, nil
 }
@@ -1588,6 +1727,7 @@ func (st *storage) reindex() error {
 		var err error
 		bookmark, err = st.reindexBunch(bookmark)
 		if err != nil {
+			log.Errorf("reindexing stopped: %v", err)
 			return err
 		}
 	}
