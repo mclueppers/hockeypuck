@@ -564,8 +564,8 @@ func (s *S) TestReindex(c *gc.C) {
 	_, err := s.storage.Exec(`UPDATE keys SET keywords = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
 	c.Assert(err, gc.IsNil)
 
-	// Check that Casey's key is no longer indexed
-	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey.marshall@canonical.com")
+	// Check that Casey's key is no longer indexed by name
+	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey%20marshall")
 	c.Assert(err, gc.IsNil)
 	res.Body.Close()
 	c.Assert(err, gc.IsNil)
@@ -579,7 +579,7 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(keydocs[0].Keywords, gc.Not(gc.Equals), "")
 
 	// Check that Casey's key is indexed again
-	res, err = http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey.marshall@canonical.com")
+	res, err = http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey%20marshall")
 	c.Assert(err, gc.IsNil)
 	res.Body.Close()
 	c.Assert(err, gc.IsNil)
