@@ -1646,82 +1646,74 @@ func (st *storage) BulkReindex(keyDocs []*keyDoc, result *hkpstorage.InsertError
 	return keysReindexed, true
 }
 
-func (st *storage) reindexBunch(bookmark *time.Time) (finished bool, err error) {
-	// Processes a bunch of keys, normalises the table schema, and writes them back out to the DB.
-	// It does not update CTime, MTime, MD5 or Doc, and does not call Notify.
-	// It *does* update IdxTime and Keywords.
-
-	t := time.Now()
-	newBookmark := *bookmark
-	finished = false
-	err = nil
-	newKeyDocs := make([]*keyDoc, 0, keysInBunch)
-	for {
-		// ModifiedSince uses LIMIT, so this is safe
-		rfps, err := st.ModifiedSince(newBookmark)
-		if err != nil {
-			return false, err
-		}
-		if len(rfps) == 0 {
-			finished = true
-			break
-		}
-		keyDocs, err := st.fetchKeydocs(rfps)
-		if err != nil {
-			return false, err
-		}
-		log.Debugf("reindexing %d records", len(keyDocs))
-		for _, kd := range keyDocs {
-			changed := false
-			// Unmarshal the doc
-			var pk jsonhkp.PrimaryKey
-			err = json.Unmarshal([]byte(kd.Doc), &pk)
-			if err != nil {
-				return false, errors.WithStack(err)
-			}
-			rfp := openpgp.Reverse(pk.Fingerprint)
-			key, err := readOneKey(pk.Bytes(), rfp)
-			if err != nil {
-				return false, errors.WithStack(err)
-			}
-			// Regenerate keywords
-			keywords := keywordsTSVector(key)
-			// Note that the TSVector is NOT stable re sort ordering of UserIDs
-			if kd.Keywords != keywords {
-				kd.Keywords = keywords
-				changed = true
-			}
-
-			if !changed {
-				break
-			}
-			newKeyDocs = append(newKeyDocs, kd)
-			newBookmark = kd.MTime
-		}
-		log.Infof("found %d stale records up to %v", len(keyDocs), newBookmark)
-		if len(newKeyDocs) > keysInBunch-100 {
-			break
-		}
+// refresh updates the keyDoc fields that cache values from the jsonb document.
+// This is called by refreshBunch to ensure the DB columns are correctly populated,
+// for example after changes to the keyword indexing policy, or to the DB schema.
+func (kd *keyDoc) refresh() (changed bool, err error) {
+	// Unmarshal the doc
+	var pk jsonhkp.PrimaryKey
+	err = json.Unmarshal([]byte(kd.Doc), &pk)
+	if err != nil {
+		return false, err
+	}
+	rfp := openpgp.Reverse(pk.Fingerprint)
+	key, err := readOneKey(pk.Bytes(), rfp)
+	if err != nil {
+		return false, err
 	}
 
-	result := hkpstorage.InsertError{}
-	n, bulkOK := st.BulkReindex(newKeyDocs, &result)
-	if !bulkOK {
-		if count, max := len(result.Errors), maxInsertErrors; count > max {
-			return finished, errors.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
-		}
+	// Regenerate keywords
+	keywords := keywordsTSVector(key)
+	// Note that the TSVector is NOT stable re sort ordering of UserIDs
+	if kd.Keywords != keywords {
+		kd.Keywords = keywords
+		changed = true
 	}
 
-	log.Infof("%d keys reindexed in %v", n, time.Since(t))
-	bookmark = &newBookmark
-	return finished, nil
+	// In future we may add further tasks here.
+	// DO NOT update the md5 field, as this is used by BulkReindex to prevent simultaneous updates.
+
+	return changed, nil
 }
 
+// refreshBunch fetches a bunch of keyDocs from the DB and returns freshened copies of the ones with stale records.
+func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, result *hkpstorage.InsertError) (finished bool) {
+	// ModifiedSince uses LIMIT, so this is safe
+	rfps, err := st.ModifiedSince(*bookmark)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		return false
+	}
+	if len(rfps) == 0 {
+		return true
+	}
+	keyDocs, err := st.fetchKeydocs(rfps)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		return false
+	}
+	log.Debugf("reindexing %d records", len(keyDocs))
+	for _, kd := range keyDocs {
+		*bookmark = kd.MTime
+		changed, err := kd.refresh()
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+		} else if changed {
+			*newKeyDocs = append(*newKeyDocs, kd)
+		}
+	}
+	log.Infof("found %d stale records up to %v", len(keyDocs), bookmark)
+	return false
+}
+
+// Reindex is a goroutine that reindexes the keydb in-place, oldest items first.
+// It does not update CTime, MTime, MD5 or Doc, and does not call Notify.
 func (st *storage) Reindex() error {
-	// A goroutine that reindexes the keydb in-place, oldest items first.
+	t := time.Now()
 	bookmark := time.Time{}
-	var finished bool
-	var err error
+	newKeyDocs := make([]*keyDoc, 0, keysInBunch)
+	result := hkpstorage.InsertError{}
+
 	for {
 		select {
 		case <-st.t.Dying():
@@ -1729,10 +1721,16 @@ func (st *storage) Reindex() error {
 		default:
 		}
 
-		finished, err = st.reindexBunch(&bookmark)
-		if err != nil {
-			log.Errorf("reindexing stopped: %v", err)
-			return err
+		finished := st.refreshBunch(&bookmark, &newKeyDocs, &result)
+		if finished || len(newKeyDocs) > keysInBunch-100 {
+			n, bulkOK := st.BulkReindex(newKeyDocs, &result)
+			if !bulkOK {
+				if count, max := len(result.Errors), maxInsertErrors; count > max {
+					return errors.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
+				}
+			}
+			log.Infof("%d keys reindexed in %v", n, time.Since(t))
+			newKeyDocs = make([]*keyDoc, 0, keysInBunch)
 		}
 		if finished {
 			log.Infof("reindexing complete")
