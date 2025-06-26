@@ -1734,6 +1734,7 @@ func (st *storage) reindex() error {
 			return err
 		}
 		if finished {
+			log.Infof("reindexing complete")
 			return nil
 		}
 	}

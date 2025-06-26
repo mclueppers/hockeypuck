@@ -50,6 +50,7 @@ type Storage interface {
 	Updater
 	Deleter
 	Notifier
+	Reindexer
 	pksstorage.Storage
 }
 
@@ -315,4 +316,8 @@ func DeleteKey(storage Storage, fp string) (KeyChange, error) {
 		return nil, errors.WithStack(err)
 	}
 	return KeyRemoved{ID: fp, Digest: lastMD5}, nil
+}
+
+type Reindexer interface {
+	StartReindex()
 }

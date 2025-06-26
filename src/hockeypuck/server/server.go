@@ -450,6 +450,10 @@ func (s *Server) Start() error {
 		s.metricsListener.Start()
 	}
 
+	if s.settings.OpenPGP.DB.ReindexOnStartup {
+		s.st.StartReindex()
+	}
+
 	return nil
 }
 
