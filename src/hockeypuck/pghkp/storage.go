@@ -1455,13 +1455,36 @@ func keywordsToTSVector(keywords []string) (string, error) {
 			return "", fmt.Errorf("keyword exceeds limit (%d >= %d)", l, lexemeLimit)
 		}
 	}
-	tsv := strings.Join(keywords, " & ")
+	tsv := strings.Join(keywords, " ")
 
 	// Allow overhead of 8 bytes for position per keyword.
 	if l := len([]byte(tsv)) + len(keywords)*8; l >= tsvectorLimit {
 		return "", fmt.Errorf("keywords exceeds limit (%d >= %d)", l, tsvectorLimit)
 	}
 	return tsv, nil
+}
+
+// keywordsFromTSVector converts a PostgreSQL tsvector back into a slice of tokens.
+func keywordsFromTSVector(tsv string) (result []string) {
+	m := make(map[string]bool)
+	var s string
+	for {
+		i := strings.Index(tsv, "'")
+		if i == -1 {
+			break
+		}
+		tsv = tsv[i+1:]
+		i = strings.Index(tsv, "'")
+		if i == -1 {
+			break
+		}
+		s, tsv = tsv[:i], tsv[i+1:]
+		m[s] = true
+	}
+	for k := range m {
+		result = append(result, k)
+	}
+	return
 }
 
 // keywordsFromKey returns a slice of searchable tokens
@@ -1669,18 +1692,20 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 	}
 
 	// Regenerate keywords
-	keywords := keywordsTSVector(key)
-	// Note that the TSVector is NOT stable re sort ordering of UserIDs
-	if kd.Keywords != keywords {
-		log.Debugf("keyword mismatch, was '%s' now '%s'", kd.Keywords, keywords)
-		kd.Keywords = keywords
+	newKeywords := keywordsFromKey(key)
+	oldKeywords := keywordsFromTSVector(kd.Keywords)
+	slices.Sort(newKeywords)
+	slices.Sort(oldKeywords)
+	if !slices.Equal(oldKeywords, newKeywords) {
+		log.Debugf("keyword mismatch, was %v now %v", oldKeywords, newKeywords)
+		kd.Keywords, err = keywordsToTSVector(newKeywords)
 		changed = true
 	}
 
 	// In future we may add further tasks here.
 	// DO NOT update the md5 field, as this is used by BulkReindex to prevent simultaneous updates.
 
-	return changed, nil
+	return changed, err
 }
 
 // refreshBunch fetches a bunch of keyDocs from the DB and returns freshened copies of the ones with stale records.
