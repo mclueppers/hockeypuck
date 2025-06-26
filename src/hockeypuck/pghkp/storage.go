@@ -1585,7 +1585,7 @@ func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.Inser
 				insTime[i], insTime[i], insTime[i], keyDocs[idx].MD5, keyDocs[idx].Keywords)
 
 		}
-		log.Debugf("Attempting bulk insertion of %d keys!", idx-lastIdx)
+		log.Debugf("Attempting bulk copy of %d keys!", idx-lastIdx)
 		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) VALUES %s",
 			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
 
