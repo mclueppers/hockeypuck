@@ -1670,7 +1670,7 @@ func (st *storage) reindexBunch(bookmark *time.Time) (finished bool, err error) 
 		if err != nil {
 			return false, err
 		}
-		log.Infof("reindexing %d records", len(keyDocs))
+		log.Debugf("reindexing %d records", len(keyDocs))
 		for _, kd := range keyDocs {
 			changed := false
 			// Unmarshal the doc
@@ -1698,6 +1698,7 @@ func (st *storage) reindexBunch(bookmark *time.Time) (finished bool, err error) 
 			newKeyDocs = append(newKeyDocs, kd)
 			newBookmark = kd.MTime
 		}
+		log.Infof("found %d stale records up to %v", len(keyDocs), newBookmark)
 		if len(newKeyDocs) > keysInBunch-100 {
 			break
 		}
@@ -1716,7 +1717,7 @@ func (st *storage) reindexBunch(bookmark *time.Time) (finished bool, err error) 
 	return finished, nil
 }
 
-func (st *storage) reindex() error {
+func (st *storage) Reindex() error {
 	// A goroutine that reindexes the keydb in-place, oldest items first.
 	bookmark := time.Time{}
 	var finished bool
@@ -1740,9 +1741,9 @@ func (st *storage) reindex() error {
 	}
 }
 
-// Start reindexing. This should only be done after server startup, not during load or dump.
+// Start reindexing in the background. This should only be done after server startup, not during load or dump.
 func (st *storage) StartReindex() {
-	st.t.Go(st.reindex)
+	st.t.Go(st.Reindex)
 }
 
 //

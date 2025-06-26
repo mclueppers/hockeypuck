@@ -564,6 +564,11 @@ func (s *S) TestReindex(c *gc.C) {
 	_, err := s.storage.Exec(`UPDATE keys SET keywords = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
 	c.Assert(err, gc.IsNil)
 
+	oldkeydocs, err := s.storage.fetchKeydocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	c.Assert(err, gc.IsNil)
+	c.Assert(oldkeydocs, gc.HasLen, 1)
+	c.Assert(oldkeydocs[0].Keywords, gc.Equals, "")
+
 	// Check that Casey's key is no longer indexed by name
 	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey%20marshall")
 	c.Assert(err, gc.IsNil)
@@ -571,12 +576,17 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 	c.Assert(res.StatusCode, gc.Equals, http.StatusNotFound)
 
-	err = s.storage.reindex()
+	err = s.storage.Reindex()
 	c.Assert(err, gc.IsNil)
-	keydocs, err := s.storage.fetchKeydocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+
+	// Check that reindexing only changed the desired fields
+	newkeydocs, err := s.storage.fetchKeydocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	c.Assert(err, gc.IsNil)
-	c.Assert(keydocs, gc.HasLen, 1)
-	c.Assert(keydocs[0].Keywords, gc.Not(gc.Equals), "")
+	c.Assert(newkeydocs, gc.HasLen, 1)
+	c.Assert(newkeydocs[0].Keywords, gc.Not(gc.Equals), "")
+	c.Assert(newkeydocs[0].CTime, gc.Equals, oldkeydocs[0].CTime)
+	c.Assert(newkeydocs[0].MTime, gc.Equals, oldkeydocs[0].MTime)
+	c.Assert(newkeydocs[0].IdxTime, gc.Not(gc.Equals), oldkeydocs[0].IdxTime)
 
 	// Check that Casey's key is indexed again
 	res, err = http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey%20marshall")
