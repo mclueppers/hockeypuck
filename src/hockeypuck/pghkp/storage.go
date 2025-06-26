@@ -1661,11 +1661,18 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	if key == nil {
+		// This should never happen, but has been observed in testing.
+		// Something is corrupt in the DB!
+		log.Errorf("nil returned successfully from readOneKey(%v)", pk)
+		return false, errors.Errorf("nil returned successfully from readOneKey(%v)", pk)
+	}
 
 	// Regenerate keywords
 	keywords := keywordsTSVector(key)
 	// Note that the TSVector is NOT stable re sort ordering of UserIDs
 	if kd.Keywords != keywords {
+		log.Debugf("keyword mismatch, was '%s' now '%s'", kd.Keywords, keywords)
 		kd.Keywords = keywords
 		changed = true
 	}
