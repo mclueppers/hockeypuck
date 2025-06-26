@@ -1702,7 +1702,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, resu
 			*newKeyDocs = append(*newKeyDocs, kd)
 		}
 	}
-	log.Infof("found %d stale records up to %v", len(keyDocs), bookmark)
+	log.Infof("found %d stale records up to %v", len(*newKeyDocs), bookmark)
 	return false
 }
 
