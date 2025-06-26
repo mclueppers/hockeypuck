@@ -329,16 +329,16 @@ const subkeys_copyin_temp_table_name string = "subkeys_copyin"
 
 // keysInBunch is the maximum number of keys sent in a bunch during bulk insertion.
 // Since keys (and subkeys) are sent to the DB in prepared statements with parameters and
-// each key requires 6 parameters, 6 x keysInBunch < 65536 must hold (keysInBunch <= ~10900).
+// each key requires keysNumColumns parameters, keysInBunch < 65536/keysNumColumns.
 // 64k (2-byte parameter count) is the current protocol limit for client communication,
 // of prepared statements in PostreSQL v13 (see Bind message in
 // https://www.postgresql.org/docs/current/protocol-message-formats.html).
-const keysInBunch int = 5000
+const keysInBunch int = 64000 / keysNumColumns
 
 // subkeysInBunch is the maximum number of subkeys sent in a bunch (for at most
-// keysInBunch keys sent in a bunch) during bulk insertion. Each subkey requires 2
-// parameters, so less than 32k subkeys can fit in a bunch (see keysInBunch).
-const subkeysInBunch int = 32000
+// keysInBunch keys sent in a bunch) during bulk insertion. If each subkey requires 2
+// parameters, ~32k subkeys can fit in a bunch (see keysInBunch).
+const subkeysInBunch int = 64000 / subkeysNumColumns
 
 // minKeys2UseBulk is the minimum number of keys in a call to Insert(..) that
 // will trigger a bulk insertion. Otherwise, Insert(..) preceeds one key at a time.
@@ -1490,6 +1490,9 @@ func keywordsFromTSVector(tsv string) (result []string) {
 // keywordsFromKey returns a slice of searchable tokens
 // extracted from the UserID packets keywords string of
 // the given key.
+//
+// TODO: shouldn't this be a method on openpgp.PrimaryKey instead?
+// It's not specific to PostgreSQL, or even to storage.
 func keywordsFromKey(key *openpgp.PrimaryKey) []string {
 	m := make(map[string]bool)
 	for _, uid := range key.UserIDs {
@@ -1697,7 +1700,7 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 	slices.Sort(newKeywords)
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
-		log.Debugf("keyword mismatch, was %v now %v", oldKeywords, newKeywords)
+		log.Debugf("keyword mismatch, was %#v now %#v", oldKeywords, newKeywords)
 		kd.Keywords, err = keywordsToTSVector(newKeywords)
 		changed = true
 	}
@@ -1709,22 +1712,23 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 }
 
 // refreshBunch fetches a bunch of keyDocs from the DB and returns freshened copies of the ones with stale records.
-func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, result *hkpstorage.InsertError) (finished bool) {
+func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, result *hkpstorage.InsertError) (count int, finished bool) {
 	// ModifiedSince uses LIMIT, so this is safe
 	rfps, err := st.ModifiedSince(*bookmark)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		return false
+		return 0, false
 	}
 	if len(rfps) == 0 {
-		return true
+		return 0, true
 	}
 	keyDocs, err := st.fetchKeydocs(rfps)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		return false
+		return 0, false
 	}
-	log.Debugf("reindexing %d records", len(keyDocs))
+	count = len(keyDocs)
+	log.Debugf("reindexing %d records", count)
 	for _, kd := range keyDocs {
 		*bookmark = kd.MTime
 		changed, err := kd.refresh()
@@ -1735,16 +1739,16 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, resu
 		}
 	}
 	log.Infof("found %d stale records up to %v", len(*newKeyDocs), bookmark)
-	return false
+	return count, false
 }
 
 // Reindex is a goroutine that reindexes the keydb in-place, oldest items first.
 // It does not update CTime, MTime, MD5 or Doc, and does not call Notify.
 func (st *storage) Reindex() error {
-	t := time.Now()
 	bookmark := time.Time{}
 	newKeyDocs := make([]*keyDoc, 0, keysInBunch)
 	result := hkpstorage.InsertError{}
+	total := 0
 
 	for {
 		select {
@@ -1753,7 +1757,9 @@ func (st *storage) Reindex() error {
 		default:
 		}
 
-		finished := st.refreshBunch(&bookmark, &newKeyDocs, &result)
+		t := time.Now()
+		count, finished := st.refreshBunch(&bookmark, &newKeyDocs, &result)
+		total += count
 		if finished || len(newKeyDocs) > keysInBunch-100 {
 			n, bulkOK := st.BulkReindex(newKeyDocs, &result)
 			if !bulkOK {
@@ -1761,7 +1767,7 @@ func (st *storage) Reindex() error {
 					return errors.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
 				}
 			}
-			log.Infof("%d keys reindexed in %v", n, time.Since(t))
+			log.Infof("%d keys reindexed in %v; total scanned %d", n, time.Since(t), total)
 			newKeyDocs = make([]*keyDoc, 0, keysInBunch)
 		}
 		if finished {
