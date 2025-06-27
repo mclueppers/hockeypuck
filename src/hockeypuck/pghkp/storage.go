@@ -177,7 +177,7 @@ var drTempTablesSQL = []string{
 `,
 }
 
-// bulkTxFilterUniqueKeys is a key-filtering quyery, between temporary tables, used for bulk insertion.
+// bulkTxFilterUniqueKeys is a key-filtering query, between temporary tables, used for bulk insertion.
 // Among all the keys in a call to Insert(..) (usually the keys in a processed key-dump file), this
 // filter gets the unique keys, i.e., those with unique rfingerprint *and* unique md5, but *neither*
 // with rfingerprint *nor* with md5 that currently exist in the DB.
@@ -280,7 +280,7 @@ SELECT rfingerprint, rsubfp FROM subkeys_checked
 `
 
 // bulkTxReindexKeys is the query for updating the SQL schema only, from a temporary table to the DB.
-// We match on the md5 field only, to prevent race conditions. (TODO: is this really safe?)
+// We match on the md5 field only, to prevent race conditions (this is safe since md5 is UNIQUE).
 const bulkTxReindexKeys string = `UPDATE keys
 SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords FROM keys_copyin
 WHERE keys.md5 = keys_copyin.md5
@@ -521,7 +521,7 @@ func (st *storage) resolveSubKeys(keyids []string) ([]string, error) {
 
 func (st *storage) MatchKeyword(search []string) ([]string, error) {
 	var result []string
-	stmt, err := st.Prepare("SELECT rfingerprint FROM keys WHERE keywords @@ plainto_tsquery($1) LIMIT $2")
+	stmt, err := st.Prepare("SELECT rfingerprint FROM keys WHERE keywords @@ $1::TSQUERY LIMIT $2")
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -529,7 +529,11 @@ func (st *storage) MatchKeyword(search []string) ([]string, error) {
 
 	for _, term := range search {
 		err = func() error {
-			rows, err := stmt.Query(term, 100)
+			query, err := keywordsTSQuery(term)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			rows, err := stmt.Query(query, 100)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -838,7 +842,7 @@ func (st *storage) insertKey(key *openpgp.PrimaryKey) (needUpsert bool, retErr e
 
 func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert bool, retErr error) {
 	stmt, err := tx.Prepare("INSERT INTO keys (rfingerprint, ctime, mtime, idxtime, md5, doc, keywords) " +
-		"SELECT $1::TEXT, $2::TIMESTAMP, $3::TIMESTAMP, $4::TIMESTAMP, $5::TEXT, $6::JSONB, to_tsvector($7) " +
+		"SELECT $1::TEXT, $2::TIMESTAMP, $3::TIMESTAMP, $4::TIMESTAMP, $5::TEXT, $6::JSONB, $7::TSVECTOR " +
 		"WHERE NOT EXISTS (SELECT 1 FROM keys WHERE rfingerprint = $1)")
 	if err != nil {
 		return false, errors.WithStack(err)
@@ -1101,7 +1105,7 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 				break
 			}
 			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, to_tsvector($%d))",
+				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR)",
 					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
 			insTime = insTime[:i+1] // re-slice +1
 			insTime[i] = time.Now().UTC()
@@ -1393,7 +1397,7 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 		return errors.Wrapf(err, "cannot serialize rfp=%q", key.RFingerprint)
 	}
 	keywords := keywordsTSVector(key)
-	result, err := tx.Exec("UPDATE keys SET mtime = $1, idxtime = $2, md5 = $3, keywords = to_tsvector($4), doc = $5 "+
+	result, err := tx.Exec("UPDATE keys SET mtime = $1, idxtime = $2, md5 = $3, keywords = $4::TSVECTOR, doc = $5 "+
 		"WHERE md5 = $6",
 		&now, &now, &key.MD5, &keywords, jsonBuf, lastMD5)
 	if err != nil {
@@ -1425,8 +1429,8 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 }
 
 func keywordsTSVector(key *openpgp.PrimaryKey) string {
-	keywords := keywordsFromKey(key)
-	tsv, err := keywordsToTSVector(keywords)
+	keywords, _, _ := keywordsFromKey(key)
+	tsv, err := keywordsToTSVector(keywords, " ")
 	if err != nil {
 		// In this case we've found a key that generated
 		// an invalid tsvector - this is pretty much guaranteed
@@ -1438,27 +1442,64 @@ func keywordsTSVector(key *openpgp.PrimaryKey) string {
 		log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err)
 		return ""
 	}
+	log.Infof("tsv: %q", tsv)
 	return tsv
+}
+
+func keywordsTSQuery(query string) (string, error) {
+	keywords, _ := keywordsFromSearch(query)
+	log.Infof("keywords: %q", keywords)
+	tsq, err := keywordsToTSVector(keywords, " & ")
+	if err != nil {
+		log.Warningf("cannot convert search string to tsquery: %v", err)
+		return "", err
+	}
+	log.Infof("tsq: %q", tsq)
+	return tsq, nil
+}
+
+// A woefully incomplete list of PostgreSQL stop words to minimise TSVector churn.
+// https://github.com/postgres/postgres/blob/master/src/backend/snowball/stopwords/english.stop
+var pgEnglishStopWords = []string{
+	"i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves",
+	"he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself",
+	"they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this", "that", "these", "those",
+	"am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing",
+	"a", "an", "the", "and", "but", "if", "or",
+	"because", "as", "until", "while", "of", "at", "by", "for", "with", "about", "against", "between", "into",
+	"through", "during", "before", "after", "above", "below",
+	"to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again", "further",
+	"then", "once", "here", "there", "when", "where", "why", "how", "all", "any", "both", "each",
+	"few", "more", "most", "other", "some", "such",
+	"no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
+	"s", "t", "can", "will", "just", "don", "should", "now",
+	"[", "\\", "]", "^", "_", "`", "{", "|", "}", "~", // easier to list these than calculate a formula
 }
 
 // keywordsToTSVector converts a slice of keywords to a
 // PostgreSQL tsvector. If the resulting tsvector would
 // be considered invalid by PostgreSQL an error is
 // returned instead.
-func keywordsToTSVector(keywords []string) (string, error) {
+// `sep` SHOULD be either " " or "&". If "&", the output
+// string is a tsquery rather than a tsvector.
+func keywordsToTSVector(keywords []string, sep string) (string, error) {
 	const (
 		lexemeLimit   = 2048            // 2KB for single lexeme
 		tsvectorLimit = 1 * 1024 * 1024 // 1MB for lexemes + positions
 	)
+	newKeywords := []string{}
 	for _, k := range keywords {
-		if l := len([]byte(k)); l >= lexemeLimit {
+		if l := len(k); l >= lexemeLimit {
 			return "", fmt.Errorf("keyword exceeds limit (%d >= %d)", l, lexemeLimit)
 		}
+		// discard low ASCII symbols, single digits, stop words
+		if (len(k) > 1 || k[0] > 0x40) && !slices.Contains(pgEnglishStopWords, k) {
+			newKeywords = append(newKeywords, fmt.Sprintf("'%s'", strings.ReplaceAll(k, "'", "''")))
+		}
 	}
-	tsv := strings.Join(keywords, " ")
+	tsv := strings.Join(newKeywords, sep)
 
-	// Allow overhead of 8 bytes for position per keyword.
-	if l := len([]byte(tsv)) + len(keywords)*8; l >= tsvectorLimit {
+	if l := len(tsv); l >= tsvectorLimit {
 		return "", fmt.Errorf("keywords exceeds limit (%d >= %d)", l, tsvectorLimit)
 	}
 	return tsv, nil
@@ -1487,52 +1528,92 @@ func keywordsFromTSVector(tsv string) (result []string) {
 	return
 }
 
-// keywordsFromKey returns a slice of searchable tokens
-// extracted from the UserID packets keywords string of
-// the given key.
+// keywordsFromKey returns slices of keyword tokens, email addresses, and UIDs
+// extracted from the UserID packets of the given key.
 //
 // TODO: shouldn't this be a method on openpgp.PrimaryKey instead?
 // It's not specific to PostgreSQL, or even to storage.
-func keywordsFromKey(key *openpgp.PrimaryKey) []string {
-	m := make(map[string]bool)
+func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []string, uids []string) {
+	keywordMap := make(map[string]bool)
+	emailMap := make(map[string]bool)
+	uidMap := make(map[string]bool)
 	for _, uid := range key.UserIDs {
 		s := strings.ToLower(uid.Keywords)
 		// always include full text of UserID (lowercased)
-		m[s] = true
-		email := s
+		keywordMap[s] = true
+		uidMap[s] = true
+		email := ""
+		commentary := s
 		lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
 		if lbr != -1 && rbr > lbr {
 			email = s[lbr+1 : rbr]
-			m[email] = true
+			commentary = s[:lbr]
+		} else {
+			email = s
+			commentary = ""
 		}
+		// TODO: this still doesn't recognise all possible forms of UID :confounded:
 		if email != "" {
+			keywordMap[email] = true
+			emailMap[email] = true
 			parts := strings.SplitN(email, "@", 2)
-			if len(parts) > 1 {
-				username, domain := parts[0], parts[1]
-				m[username] = true
-				m[domain] = true
+			if len(parts) == 2 {
+				keywordMap[parts[0]] = true
+				keywordMap[parts[1]] = true
 			}
 		}
-		if lbr != -1 {
-			fields := strings.FieldsFunc(s[:lbr], func(r rune) bool {
-				if !utf8.ValidRune(r) {
-					return true
+		if commentary != "" {
+			for _, field := range strings.FieldsFunc(commentary, func(r rune) bool {
+				return !utf8.ValidRune(r) || // split on invalid runes
+					!(unicode.IsLetter(r) || unicode.IsNumber(r) || r == '-' || r == '@') // split on [^[:alnum:]@-]
+			}) {
+				keywordMap[field] = true
+				for _, part := range strings.Split(field, "-") {
+					keywordMap[part] = true
 				}
-				if unicode.IsLetter(r) || unicode.IsNumber(r) || r == '-' {
-					return false
-				}
-				return true
-			})
-			for _, field := range fields {
-				m[field] = true
 			}
 		}
 	}
-	var result []string
-	for k := range m {
-		result = append(result, k)
+	for k := range keywordMap {
+		keywords = append(keywords, k)
 	}
-	return result
+	for k := range emailMap {
+		emails = append(emails, k)
+	}
+	for k := range uidMap {
+		uids = append(uids, k)
+	}
+	return
+}
+
+// keywordsFromSearch returns slices of keyword tokens and email addresses
+// extracted from the supplied search string.
+//
+// TODO: shouldn't this also be generic?
+func keywordsFromSearch(search string) (keywords []string, emails []string) {
+	keywordMap := make(map[string]bool)
+	emailMap := make(map[string]bool)
+	s := strings.ToLower(search)
+	email := s
+	lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
+	if lbr != -1 && rbr > lbr {
+		email = s[lbr+1 : rbr]
+		keywordMap[email] = true
+		emailMap[email] = true
+	} else {
+		for _, field := range strings.FieldsFunc(s, func(r rune) bool {
+			return !utf8.ValidRune(r) || unicode.IsSpace(r) // split on invalid runes and whitespace
+		}) {
+			keywordMap[field] = true
+		}
+	}
+	for k := range keywordMap {
+		keywords = append(keywords, k)
+	}
+	for k := range emailMap {
+		emails = append(emails, k)
+	}
+	return
 }
 
 func subkeys(key *openpgp.PrimaryKey) []string {
@@ -1603,7 +1684,7 @@ func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.Inser
 				break
 			}
 			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, to_tsvector($%d))",
+				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR)",
 					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
 			insTime = insTime[:i+1] // re-slice +1
 			insTime[i] = time.Now().UTC()
@@ -1695,13 +1776,13 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 	}
 
 	// Regenerate keywords
-	newKeywords := keywordsFromKey(key)
+	newKeywords, _, _ := keywordsFromKey(key)
 	oldKeywords := keywordsFromTSVector(kd.Keywords)
 	slices.Sort(newKeywords)
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
-		log.Debugf("keyword mismatch on fp=%s, was %#v now %#v", pk.Fingerprint, oldKeywords, newKeywords)
-		kd.Keywords, err = keywordsToTSVector(newKeywords)
+		log.Debugf("keyword mismatch on fp=%s, was %q now %q", pk.Fingerprint, oldKeywords, newKeywords)
+		kd.Keywords, err = keywordsToTSVector(newKeywords, " ")
 		changed = true
 	}
 
