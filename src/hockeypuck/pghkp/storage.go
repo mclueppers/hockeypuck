@@ -280,10 +280,10 @@ SELECT rfingerprint, rsubfp FROM subkeys_checked
 `
 
 // bulkTxReindexKeys is the query for updating the SQL schema only, from a temporary table to the DB.
-// We require that both the fingerprint and md5 match, to prevent race conditions.
+// We match on the md5 field only, to prevent race conditions. (TODO: is this really safe?)
 const bulkTxReindexKeys string = `UPDATE keys
 SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords FROM keys_copyin
-WHERE keys.rfingerprint = keys_copyin.rfingerprint AND keys.md5 = keys_copyin.md5
+WHERE keys.md5 = keys_copyin.md5
 `
 
 // Stats collection queries
@@ -1700,7 +1700,7 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 	slices.Sort(newKeywords)
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
-		log.Debugf("keyword mismatch, was %#v now %#v", oldKeywords, newKeywords)
+		log.Debugf("keyword mismatch on fp=%s, was %#v now %#v", pk.Fingerprint, oldKeywords, newKeywords)
 		kd.Keywords, err = keywordsToTSVector(newKeywords)
 		changed = true
 	}
