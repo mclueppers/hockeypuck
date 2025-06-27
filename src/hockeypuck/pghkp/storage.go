@@ -1442,19 +1442,16 @@ func keywordsTSVector(key *openpgp.PrimaryKey) string {
 		log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err)
 		return ""
 	}
-	log.Infof("tsv: %q", tsv)
 	return tsv
 }
 
 func keywordsTSQuery(query string) (string, error) {
 	keywords, _ := keywordsFromSearch(query)
-	log.Infof("keywords: %q", keywords)
 	tsq, err := keywordsToTSVector(keywords, " & ")
 	if err != nil {
 		log.Warningf("cannot convert search string to tsquery: %v", err)
 		return "", err
 	}
-	log.Infof("tsq: %q", tsq)
 	return tsq, nil
 }
 
@@ -1492,13 +1489,7 @@ func keywordsToTSVector(keywords []string, sep string) (string, error) {
 		if l := len(k); l >= lexemeLimit {
 			return "", fmt.Errorf("keyword exceeds limit (%d >= %d)", l, lexemeLimit)
 		}
-		if len(k) == 0 {
-			break
-		}
-		// discard low ASCII symbols, single digits, stop words
-		if (len(k) > 1 || k[0] > 0x40) && !slices.Contains(pgEnglishStopWords, k) {
-			newKeywords = append(newKeywords, fmt.Sprintf("'%s'", strings.ReplaceAll(k, "'", "''")))
-		}
+		newKeywords = append(newKeywords, fmt.Sprintf("'%s'", strings.ReplaceAll(k, "'", "''")))
 	}
 	tsv := strings.Join(newKeywords, sep)
 
@@ -1578,12 +1569,22 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []strin
 		}
 	}
 	for k := range keywordMap {
+		// discard empty strings, low ASCII symbols, single digits, stop words
+		if k == "" || (len(k) == 1 && k[0] < 0x41) || slices.Contains(pgEnglishStopWords, k) {
+			continue
+		}
 		keywords = append(keywords, k)
 	}
 	for k := range emailMap {
+		if k == "" {
+			continue
+		}
 		emails = append(emails, k)
 	}
 	for k := range uidMap {
+		if k == "" {
+			continue
+		}
 		uids = append(uids, k)
 	}
 	return
@@ -1611,9 +1612,16 @@ func keywordsFromSearch(search string) (keywords []string, emails []string) {
 		}
 	}
 	for k := range keywordMap {
+		// discard empty strings, low ASCII symbols, single digits, stop words
+		if k == "" || (len(k) == 1 && k[0] < 0x41) || slices.Contains(pgEnglishStopWords, k) {
+			continue
+		}
 		keywords = append(keywords, k)
 	}
 	for k := range emailMap {
+		if k == "" {
+			continue
+		}
 		emails = append(emails, k)
 	}
 	return

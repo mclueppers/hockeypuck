@@ -384,7 +384,7 @@ func (s *S) TestPolicyURI(c *gc.C) {
 	c.Assert(keyDocs, gc.HasLen, 1)
 
 	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=openpgp-auth%2Bl2-infra@gentoo.org")
-	comment := gc.Commentf("search=openpgp-auth%2Bl2-infra@gentoo.org")
+	comment := gc.Commentf("%s", "search=openpgp-auth%2Bl2-infra@gentoo.org") // beware '%' in search string
 	c.Assert(err, gc.IsNil, comment)
 	armor, err := io.ReadAll(res.Body)
 	res.Body.Close()
