@@ -1492,6 +1492,9 @@ func keywordsToTSVector(keywords []string, sep string) (string, error) {
 		if l := len(k); l >= lexemeLimit {
 			return "", fmt.Errorf("keyword exceeds limit (%d >= %d)", l, lexemeLimit)
 		}
+		if len(k) == 0 {
+			break
+		}
 		// discard low ASCII symbols, single digits, stop words
 		if (len(k) > 1 || k[0] > 0x40) && !slices.Contains(pgEnglishStopWords, k) {
 			newKeywords = append(newKeywords, fmt.Sprintf("'%s'", strings.ReplaceAll(k, "'", "''")))
