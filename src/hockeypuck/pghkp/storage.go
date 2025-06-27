@@ -946,13 +946,10 @@ func (st *storage) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error)
 		if err != nil {
 			return errors.Wrapf(err, "preparing DB server job %s", jobDesc[i])
 		}
+		defer bulkTxStmt.Close()
 		_, err = bulkTxStmt.Exec()
 		if err != nil {
 			return errors.Wrapf(err, "issuing DB server job %s", jobDesc[i])
-		}
-		err = bulkTxStmt.Close()
-		if err != nil {
-			return errors.Wrapf(err, "closing DB server job %s", jobDesc[i])
 		}
 	}
 	return err
@@ -1044,32 +1041,11 @@ func (st *storage) bulkInsertSendBunchTx(keystmt, msgSpec string, keysValueArgs 
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	defer stmt.Close()
 	_, err = stmt.Exec(keysValueArgs...) // All keys in bunch
 	if err != nil {
 		return errors.Wrapf(err, "cannot simply send a bunch of %s to server (too large bunch?)", msgSpec)
 	}
-	err = stmt.Close()
-	if err != nil {
-		return errors.Wrapf(err, "failed to close xfer sending a bunch of %s to server", msgSpec)
-	}
-
-	return nil
-}
-
-func (st *storage) bulkInsertSendBunch(keystmt, subkeystmt string, keysValueArgs, subkeysValueArgs []interface{}) (err error) {
-
-	// Send all keys to in-mem tables to the pg server; *no constraints checked*
-	err = st.bulkInsertSendBunchTx(keystmt, "keys", keysValueArgs)
-	if err != nil {
-		return err
-	}
-
-	// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
-	err = st.bulkInsertSendBunchTx(subkeystmt, "subkeys", subkeysValueArgs)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -1118,17 +1094,26 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 					*skeyInsArgs[idx][sidx].keyRFingerprint, *skeyInsArgs[idx][sidx].subkeyRFingerprint)
 			}
 		}
-		log.Debugf("Attempting bulk insertion of %d keys and a total of %d subkeys!", idx-lastIdx, totSubkeyArgs>>1)
+		log.Debugf("attempting bulk insertion of %d keys and a total of %d subkeys!", idx-lastIdx, totSubkeyArgs>>1)
+
+		// Send all keys to in-mem tables to the pg server; *no constraints checked*
 		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) VALUES %s",
 			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
-		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp) VALUES %s",
-			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
-
-		err := st.bulkInsertSendBunch(keystmt, subkeystmt, keysValueArgs, subkeysValueArgs)
+		err := st.bulkInsertSendBunchTx(keystmt, "keys", keysValueArgs)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			return false
 		}
+
+		// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
+		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp) VALUES %s",
+			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
+		err = st.bulkInsertSendBunchTx(subkeystmt, "subkeys", subkeysValueArgs)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			return false
+		}
+
 		log.Debugf("%d keys, %d subkeys sent to DB...", idx-lastIdx, totSubkeyArgs>>1)
 	}
 	return true
@@ -1358,6 +1343,7 @@ func (st *storage) Delete(fp string) (_ string, retErr error) {
 	return md5, nil
 }
 
+// deleteTx does not handle cleanup; the caller MUST defer commit/rollback
 func (st *storage) deleteTx(tx *sql.Tx, fp string) (string, error) {
 	rfp := openpgp.Reverse(fp)
 	_, err := tx.Exec("DELETE FROM subkeys WHERE rfingerprint = $1", rfp)
@@ -1473,6 +1459,13 @@ var pgEnglishStopWords = []string{
 	"[", "\\", "]", "^", "_", "`", "{", "|", "}", "~", // easier to list these than calculate a formula
 }
 
+// sanitiseForTSVector escapes characters that have special meaning to ::TSVECTOR
+func sanitiseForTSVector(s string) string {
+	s = strings.ReplaceAll(s, `'`, `''`)
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return s
+}
+
 // keywordsToTSVector converts a slice of keywords to a
 // PostgreSQL tsvector. If the resulting tsvector would
 // be considered invalid by PostgreSQL an error is
@@ -1489,7 +1482,7 @@ func keywordsToTSVector(keywords []string, sep string) (string, error) {
 		if l := len(k); l >= lexemeLimit {
 			return "", fmt.Errorf("keyword exceeds limit (%d >= %d)", l, lexemeLimit)
 		}
-		newKeywords = append(newKeywords, fmt.Sprintf("'%s'", strings.ReplaceAll(k, "'", "''")))
+		newKeywords = append(newKeywords, fmt.Sprintf("'%s'", sanitiseForTSVector(k)))
 	}
 	tsv := strings.Join(newKeywords, sep)
 
@@ -1703,11 +1696,11 @@ func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.Inser
 				insTime[i], insTime[i], insTime[i], keyDocs[idx].MD5, keyDocs[idx].Keywords)
 
 		}
-		log.Debugf("Attempting bulk copy of %d keys!", idx-lastIdx)
+		log.Debugf("attempting bulk copy of %d keys", idx-lastIdx)
 		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) VALUES %s",
 			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
 
-		err := st.bulkInsertSendBunch(keystmt, "", keysValueArgs, nil)
+		err := st.bulkInsertSendBunchTx(keystmt, "reindexes", keysValueArgs)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			return false
@@ -1729,6 +1722,7 @@ func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 }
 
 func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
+	log.Debugf("attempting bulk update of keys")
 	txStrs := []string{bulkTxReindexKeys}
 	msgStrs := []string{"bulkTx-reindex-keys"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
@@ -1836,6 +1830,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, resu
 
 // Reindex is a goroutine that reindexes the keydb in-place, oldest items first.
 // It does not update CTime, MTime, MD5 or Doc, and does not call Notify.
+// It always returns nil, as reindex failure is not fatal.
 func (st *storage) Reindex() error {
 	bookmark := time.Time{}
 	newKeyDocs := make([]*keyDoc, 0, keysInBunch)
@@ -1855,8 +1850,10 @@ func (st *storage) Reindex() error {
 		if finished || len(newKeyDocs) > keysInBunch-100 {
 			n, bulkOK := st.BulkReindex(newKeyDocs, &result)
 			if !bulkOK {
+				log.Debugf("bulkReindex not ok, result: %q", result)
 				if count, max := len(result.Errors), maxInsertErrors; count > max {
-					return errors.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
+					log.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
+					return nil
 				}
 			}
 			log.Infof("%d keys reindexed in %v; total scanned %d", n, time.Since(t), total)
