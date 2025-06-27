@@ -581,23 +581,23 @@ func (st *storage) ModifiedSince(t time.Time) ([]string, error) {
 	return result, nil
 }
 
-var deletedKey = errors.Errorf("Key deleted")
+var deletedKey = errors.Errorf("key deleted")
 
 func (st *storage) preen(key *openpgp.PrimaryKey, pk jsonhkp.PrimaryKey, sqlMD5 string) error {
 	if key == nil {
-		log.Warnf("Unparseable key material in database (fp=%s); deleting", pk.Fingerprint)
+		log.Warnf("unparseable key material in database (fp=%s); deleting", pk.Fingerprint)
 		_, err := st.Delete(pk.Fingerprint)
 		if err != nil {
-			log.Errorf("Could not delete fp=%s", pk.Fingerprint)
+			log.Errorf("could not delete fp=%s", pk.Fingerprint)
 			return err
 		}
 		return deletedKey
 	}
 	if len(key.SubKeys) == 0 && len(key.UserIDs) == 0 && len(key.Signatures) == 0 {
-		log.Warnf("Lone primary key packet in database (fp=%s); deleting", pk.Fingerprint)
+		log.Warnf("lone primary key packet in database (fp=%s); deleting", pk.Fingerprint)
 		_, err := st.Delete(pk.Fingerprint)
 		if err != nil {
-			log.Errorf("Could not delete fp=%s", pk.Fingerprint)
+			log.Errorf("could not delete fp=%s", pk.Fingerprint)
 			return err
 		}
 		return deletedKey
@@ -607,7 +607,7 @@ func (st *storage) preen(key *openpgp.PrimaryKey, pk jsonhkp.PrimaryKey, sqlMD5 
 		// Beware this may cause double-updates in some circumstances
 		err := st.Update(key, key.KeyID(), sqlMD5)
 		if err != nil {
-			log.Errorf("Could not clean fp=%s", pk.Fingerprint)
+			log.Errorf("could not clean fp=%s", pk.Fingerprint)
 			return err
 		}
 	}
@@ -651,7 +651,7 @@ func (st *storage) FetchKeys(rfps []string, options ...string) ([]*openpgp.Prima
 			// It is possible that the JSON MD5 field does not match the SQL MD5 field
 			// This is harmless in itself since we throw away the JSON field,
 			// but it may be a symptom of problems elsewhere, so log it.
-			log.Warnf("Inconsistent MD5 in database (sql=%s, json=%s), ignoring json", sqlMD5, pk.MD5)
+			log.Warnf("inconsistent MD5 in database (sql=%s, json=%s), ignoring json", sqlMD5, pk.MD5)
 		}
 
 		rfp := openpgp.Reverse(pk.Fingerprint)
@@ -709,7 +709,7 @@ func (st *storage) FetchRecords(rfps []string, options ...string) ([]*hkpstorage
 			// It is possible that the JSON MD5 field does not match the SQL MD5 field
 			// This is harmless in itself since we throw away the JSON field,
 			// but it may be a symptom of problems elsewhere, so log it.
-			log.Warnf("Inconsistent MD5 in database (sql=%s, json=%s), ignoring json", sqlMD5, pk.MD5)
+			log.Warnf("inconsistent MD5 in database (sql=%s, json=%s), ignoring json", sqlMD5, pk.MD5)
 		}
 
 		rfp := openpgp.Reverse(pk.Fingerprint)
@@ -898,7 +898,7 @@ func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (int, int,
 	err := st.QueryRow(bulkInsNumMinDups).Scan(&minDups)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		log.Warn("Error querying duplicate keys. Stats may be inaccurate.")
+		log.Warnf("could not update duplicate stats: %v", err)
 		minDups = 0
 	}
 	// In-file duplicates may be duplicates even if we insert a subkey for a key's rfp
@@ -907,20 +907,20 @@ func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (int, int,
 	maxDups += minDups
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		log.Warn("Error querying duplicate keys. Stats may be inaccurate.")
+		log.Warnf("could not update duplicate stats: %v", err)
 		maxDups = 0
 	}
 	// Get keys/subkeys inserted
 	err = st.QueryRow(bulkInsertedKeysNum).Scan(&keysInserted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		log.Warn("Error querying keys inserted. Stats may be inaccurate.")
+		log.Warnf("could not update keys inserted stats: %v", err)
 		keysInserted = 0
 	}
 	err = st.QueryRow(bulkInsertedSubkeysNum).Scan(&subkeysInserted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		log.Warn("Error querying subkeys inserted. Stats may be inaccurate.")
+		log.Warnf("could not update subkeys inserted stats: %v", err)
 		subkeysInserted = 0
 	}
 	return maxDups, minDups, keysInserted, subkeysInserted
@@ -961,7 +961,7 @@ func (st *storage) bulkInsertCheckSubkeys(result *hkpstorage.InsertError) (nullT
 	err := st.QueryRow(bulkInsNumNullSubkeys).Scan(&numNulls)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		log.Warn("Error querying subkeys with NULLs. Stats may be inaccurate.")
+		log.Warnf("could not update subkeys with NULL stats: %v", err)
 	}
 
 	// (1) Itermediate insert: no NULL fields & no Duplicates (in-file or in DB)
@@ -984,7 +984,7 @@ func (st *storage) bulkInsertCheckKeys(result *hkpstorage.InsertError) (n int, o
 	err := st.QueryRow(bulkInsNumNullKeys).Scan(&numNulls)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		log.Warn("Error querying keys with NULLs. Stats may be inaccurate.")
+		log.Warnf("could not update keys with NULL stats: %v", err)
 	}
 
 	// (1) rfingerprint & md5 are also UNIQUE in keys_checked so no duplicates inside this same file allowed
@@ -1170,7 +1170,7 @@ func (st *storage) bulkCreateTempTables() error {
 }
 
 func (st *storage) BulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError) (int, bool) {
-	log.Infof("Attempting bulk insertion of keys")
+	log.Infof("attempting bulk insertion of keys")
 	t := time.Now() // FIXME: Remove this
 	// Create 2 pairs of _temporary_ (in-mem) tables:
 	// (a) keys_copyin, subkeys_copyin
@@ -1235,7 +1235,7 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 	}
 
 	if !bulkOK {
-		log.Infof("Bulk insertion %s. Reverting to normal insertion.",
+		log.Infof("bulk insertion %s; reverting to normal insertion",
 			(map[bool]string{true: "skipped (small number of keys)", false: "failed"})[bulkSkip])
 
 		for _, key := range keys {
@@ -1255,13 +1255,13 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 				for i := 0; i < 3; i++ {
 					kc, err = st.upsertKeyOnInsert(key)
 					if err != errTargetMissing {
-						log.Infof("Key fp(%v) is slippery; backing off", key.Fingerprint())
+						log.Infof("key fp(%v) is slippery; backing off", key.Fingerprint())
 						break
 					}
 				}
 				if err == errTargetMissing {
 					result.Errors = append(result.Errors,
-						errors.Errorf("Key fp(%v) was changing while we were updating it", key.Fingerprint()))
+						errors.Errorf("key fp(%v) was changing while we were updating it", key.Fingerprint()))
 				} else if err != nil {
 					result.Errors = append(result.Errors, err)
 					continue
@@ -1391,7 +1391,7 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected > 1 {
-		return errors.Errorf("Unexpected error when updating digest %v fp(%v)", lastMD5, key.Fingerprint())
+		return errors.Errorf("unexpected error when updating digest %v fp(%v)", lastMD5, key.Fingerprint())
 	} else if rowsAffected == 0 {
 		// The md5 disappeared before we could update it. Thread-safety backoff.
 		return errTargetMissing
@@ -1715,7 +1715,7 @@ func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 	err := st.QueryRow(bulkCopiedKeysNum).Scan(&keysReindexed)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
-		log.Warn("Error querying keys reindexed. Stats may be inaccurate.")
+		log.Warnf("could not update reindex stats: %v", err)
 		keysReindexed = 0
 	}
 	return keysReindexed
@@ -1734,7 +1734,7 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 }
 
 func (st *storage) BulkReindex(keyDocs []*keyDoc, result *hkpstorage.InsertError) (int, bool) {
-	log.Infof("Attempting bulk reindex of %d keys", len(keyDocs))
+	log.Infof("attempting bulk reindex of %d keys", len(keyDocs))
 	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
 	err := st.bulkCreateTempTables()
 	if err != nil {
