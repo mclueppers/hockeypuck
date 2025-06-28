@@ -192,9 +192,14 @@ func (st *storage) MatchKeyword(search []string) ([]string, error) {
 	return result, nil
 }
 
+// ModifiedSince returns the fingerprints of the first 100 keys modified after the reference time.
+// To get another 100 keys, pass the mtime of the last key returned to a subsequent invocation.
+//
+// TODO: Multiple calls do not appear to work as expected, the result windows overlap.
+// Are the results sorted correctly by increasing MTime? That may explain the results.
 func (st *storage) ModifiedSince(t time.Time) ([]string, error) {
 	var result []string
-	rows, err := st.Query("SELECT rfingerprint FROM keys WHERE mtime > $1 ORDER BY mtime ASC LIMIT 100", t.UTC())
+	rows, err := st.Query("SELECT rfingerprint FROM keys WHERE mtime > $1 ORDER BY mtime ASC LIMIT 100", t)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

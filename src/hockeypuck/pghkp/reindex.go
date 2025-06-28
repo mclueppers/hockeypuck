@@ -204,8 +204,11 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 }
 
 // refreshBunch fetches a bunch of keyDocs from the DB and returns freshened copies of the ones with stale records.
+//
 // TODO: ModifiedSince habitually yields the same entries multiple times (FIXME!),
-// so we use a map (not an array) to deduplicate the returned keyDocs.
+// so we use a map (not an array) to deduplicate the returned keyDocs,
+// and explicitly compare timestamps instead of assuming monotonicity.
+// (reverting these mitigations will almost certainly improve the performance)
 func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*keyDoc, result *hkpstorage.InsertError) (count int, finished bool) {
 	// ModifiedSince uses LIMIT, so this is safe
 	rfps, err := st.ModifiedSince(*bookmark)
@@ -224,7 +227,10 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*keyD
 	count = len(keyDocs)
 	log.Debugf("reindexing %d records", count)
 	for _, kd := range keyDocs {
-		*bookmark = kd.MTime
+		// Can't trust MTime to be monotonically increasing, so compare as we go.
+		if bookmark.Before(kd.MTime) {
+			*bookmark = kd.MTime
+		}
 		changed, err := kd.refresh()
 		if err != nil {
 			result.Errors = append(result.Errors, err)
