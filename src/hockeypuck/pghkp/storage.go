@@ -1683,8 +1683,11 @@ func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*keyDoc], result *hkpstora
 		totKeyArgs := 0
 		keysValueStrings := make([]string, 0, keysInBunch)
 		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns)
+		kd, pullOk = keyDocsPull()
+		if !pullOk {
+			return true
+		}
 		for i := 0; pullOk; idx, i = idx+1, i+1 {
-			kd, pullOk = keyDocsPull()
 			totKeyArgs += keysNumColumns
 			if totKeyArgs > keysInBunch*keysNumColumns {
 				totKeyArgs -= keysNumColumns
@@ -1696,7 +1699,7 @@ func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*keyDoc], result *hkpstora
 			insTime := time.Now().UTC()
 			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
 				insTime, insTime, insTime, kd.MD5, kd.Keywords)
-
+			kd, pullOk = keyDocsPull()
 		}
 		log.Debugf("attempting bulk copy of %d keys", idx-lastIdx)
 		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) VALUES %s",
