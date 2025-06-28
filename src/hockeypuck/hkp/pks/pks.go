@@ -182,6 +182,8 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		lastSync = time.Now().AddDate(0, 0, -maxHistoryDays)
 	}
 
+	// TODO: ModifiedSince habitually yields the same entries multiple times (FIXME!),
+	// so we explicitly compare timestamps instead of assuming monotonicity.
 	uuids, err := sender.hkpStorage.ModifiedSince(lastSync)
 	if err != nil {
 		return errors.WithStack(err)
@@ -207,7 +209,10 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 			return errors.WithStack(err)
 		}
 		// Send successful, update the timestamp accordingly
-		status.LastSync = key.MTime
+		// (FIXME) Can't trust MTime to be monotonically increasing, so compare as we go.
+		if status.LastSync.Before(key.MTime) {
+			status.LastSync = key.MTime
+		}
 		err = sender.storage.PKSUpdate(status)
 		if err != nil {
 			return errors.WithStack(err)
