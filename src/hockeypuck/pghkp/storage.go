@@ -259,6 +259,14 @@ func sanitiseForTSVector(s string) string {
 	return s
 }
 
+// desanitiseFromTSVector un-escapes characters that have special meaning to ::TSVECTOR
+// It is the inverse of sanitiseForTSVector
+func desanitiseFromTSVector(s string) string {
+	s = strings.ReplaceAll(s, `''`, `'`)
+	s = strings.ReplaceAll(s, `\\`, `\`)
+	return s
+}
+
 // keywordsToTSVector converts a slice of keywords to a
 // PostgreSQL tsvector. If the resulting tsvector would
 // be considered invalid by PostgreSQL an error is
@@ -303,7 +311,7 @@ func keywordsFromTSVector(tsv string) (result []string) {
 		m[s] = true
 	}
 	for k := range m {
-		result = append(result, k)
+		result = append(result, desanitiseFromTSVector(k))
 	}
 	return
 }
