@@ -23,6 +23,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"iter"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -1070,7 +1072,6 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
 		subkeysValueStrings := make([]string, 0, subkeysInBunch)
 		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
-		insTime := make([]time.Time, 0, keysInBunch)                                 // stupid but anyway...
 		for i, j := 0, 0; idx < lenKIA; idx, i = idx+1, i+1 {
 			lenSKIA := len(skeyInsArgs[idx])
 			totKeyArgs += keysNumColumns
@@ -1083,10 +1084,9 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 			keysValueStrings = append(keysValueStrings,
 				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR)",
 					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
-			insTime = insTime[:i+1] // re-slice +1
-			insTime[i] = time.Now().UTC()
+			insTime := time.Now().UTC()
 			keysValueArgs = append(keysValueArgs, *keyInsArgs[idx].RFingerprint, *keyInsArgs[idx].jsonStrDoc,
-				insTime[i], insTime[i], insTime[i], *keyInsArgs[idx].MD5, *keyInsArgs[idx].keywords)
+				insTime, insTime, insTime, *keyInsArgs[idx].MD5, *keyInsArgs[idx].keywords)
 
 			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
 				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2))
@@ -1674,14 +1674,17 @@ func (st *storage) RenotifyAll() error {
 	return st.BulkNotify("SELECT md5 FROM keys")
 }
 
-func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.InsertError) bool {
-	lenKIA := len(keyDocs)
-	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
+func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*keyDoc], result *hkpstorage.InsertError) bool {
+	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
+	defer keyDocsPullStop()
+	pullOk := true
+	var kd *keyDoc
+	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
 		totKeyArgs := 0
 		keysValueStrings := make([]string, 0, keysInBunch)
 		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns)
-		insTime := make([]time.Time, 0, keysInBunch)
-		for i := 0; idx < lenKIA; idx, i = idx+1, i+1 {
+		for i := 0; pullOk; idx, i = idx+1, i+1 {
+			kd, pullOk = keyDocsPull()
 			totKeyArgs += keysNumColumns
 			if totKeyArgs > keysInBunch*keysNumColumns {
 				totKeyArgs -= keysNumColumns
@@ -1690,10 +1693,9 @@ func (st *storage) bulkReindexDoCopy(keyDocs []*keyDoc, result *hkpstorage.Inser
 			keysValueStrings = append(keysValueStrings,
 				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR)",
 					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
-			insTime = insTime[:i+1] // re-slice +1
-			insTime[i] = time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, keyDocs[idx].RFingerprint, "{}",
-				insTime[i], insTime[i], insTime[i], keyDocs[idx].MD5, keyDocs[idx].Keywords)
+			insTime := time.Now().UTC()
+			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
+				insTime, insTime, insTime, kd.MD5, kd.Keywords)
 
 		}
 		log.Debugf("attempting bulk copy of %d keys", idx-lastIdx)
@@ -1733,7 +1735,7 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 	return true
 }
 
-func (st *storage) BulkReindex(keyDocs []*keyDoc, result *hkpstorage.InsertError) (int, bool) {
+func (st *storage) bulkReindex(keyDocs map[string]*keyDoc, result *hkpstorage.InsertError) (int, bool) {
 	log.Infof("attempting bulk reindex of %d keys", len(keyDocs))
 	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
 	err := st.bulkCreateTempTables()
@@ -1743,7 +1745,7 @@ func (st *storage) BulkReindex(keyDocs []*keyDoc, result *hkpstorage.InsertError
 	}
 	defer st.bulkDropTempTables()
 	keysReindexed := 0
-	if !st.bulkReindexDoCopy(keyDocs, result) {
+	if !st.bulkReindexDoCopy(maps.Values(keyDocs), result) {
 		return 0, false
 	}
 	if !st.bulkReindexKeys(result) {
@@ -1792,13 +1794,15 @@ func (kd *keyDoc) refresh() (changed bool, err error) {
 	}
 
 	// In future we may add further tasks here.
-	// DO NOT update the md5 field, as this is used by BulkReindex to prevent simultaneous updates.
+	// DO NOT update the md5 field, as this is used by bulkReindex to prevent simultaneous updates.
 
 	return changed, err
 }
 
 // refreshBunch fetches a bunch of keyDocs from the DB and returns freshened copies of the ones with stale records.
-func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, result *hkpstorage.InsertError) (count int, finished bool) {
+// TODO: ModifiedSince habitually yields the same entries multiple times (FIXME!),
+// so we use a map (not an array) to deduplicate the returned keyDocs.
+func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*keyDoc, result *hkpstorage.InsertError) (count int, finished bool) {
 	// ModifiedSince uses LIMIT, so this is safe
 	rfps, err := st.ModifiedSince(*bookmark)
 	if err != nil {
@@ -1821,10 +1825,10 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, resu
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 		} else if changed {
-			*newKeyDocs = append(*newKeyDocs, kd)
+			newKeyDocs[kd.MD5] = kd
 		}
 	}
-	log.Infof("found %d stale records up to %v", len(*newKeyDocs), bookmark)
+	log.Infof("found %d stale records up to %v", len(newKeyDocs), bookmark)
 	return count, false
 }
 
@@ -1833,7 +1837,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs *[]*keyDoc, resu
 // It always returns nil, as reindex failure is not fatal.
 func (st *storage) Reindex() error {
 	bookmark := time.Time{}
-	newKeyDocs := make([]*keyDoc, 0, keysInBunch)
+	newKeyDocs := make(map[string]*keyDoc, keysInBunch)
 	result := hkpstorage.InsertError{}
 	total := 0
 
@@ -1845,10 +1849,10 @@ func (st *storage) Reindex() error {
 		}
 
 		t := time.Now()
-		count, finished := st.refreshBunch(&bookmark, &newKeyDocs, &result)
+		count, finished := st.refreshBunch(&bookmark, newKeyDocs, &result)
 		total += count
 		if finished || len(newKeyDocs) > keysInBunch-100 {
-			n, bulkOK := st.BulkReindex(newKeyDocs, &result)
+			n, bulkOK := st.bulkReindex(newKeyDocs, &result)
 			if !bulkOK {
 				log.Debugf("bulkReindex not ok, result: %q", result)
 				if count, max := len(result.Errors), maxInsertErrors; count > max {
@@ -1857,7 +1861,7 @@ func (st *storage) Reindex() error {
 				}
 			}
 			log.Infof("%d keys reindexed in %v; total scanned %d", n, time.Since(t), total)
-			newKeyDocs = make([]*keyDoc, 0, keysInBunch)
+			newKeyDocs = make(map[string]*keyDoc, keysInBunch)
 		}
 		if finished {
 			log.Infof("reindexing complete")
