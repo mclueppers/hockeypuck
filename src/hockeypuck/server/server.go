@@ -469,6 +469,10 @@ func (s *Server) Start() error {
 		s.metricsListener.Start()
 	}
 
+	if s.rateLimiter != nil {
+		s.rateLimiter.Start()
+	}
+
 	return nil
 }
 
