@@ -584,7 +584,7 @@ func (s *S) TestReindex(c *gc.C) {
 	_, err := s.storage.Exec(`UPDATE keys SET keywords = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
 	c.Assert(err, gc.IsNil)
 
-	oldkeydocs, err := s.storage.fetchKeydocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	oldkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	c.Assert(err, gc.IsNil)
 	c.Assert(oldkeydocs, gc.HasLen, 1)
 	c.Assert(oldkeydocs[0].Keywords, gc.Equals, "")
@@ -601,7 +601,7 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 
 	// Check that reindexing only changed the desired fields
-	newkeydocs, err := s.storage.fetchKeydocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	newkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	c.Assert(err, gc.IsNil)
 	c.Assert(newkeydocs, gc.HasLen, 1)
 	c.Assert(newkeydocs[0].Keywords, gc.Equals, "'canonical.com' 'casey' 'casey marshall <casey.marshall@canonical.com>' 'casey marshall <cmars@cmarstech.com>' 'casey.marshall' 'casey.marshall@canonical.com' 'cmars' 'cmars@cmarstech.com' 'cmarstech.com' 'marshall'")
@@ -619,7 +619,7 @@ func (s *S) TestReindex(c *gc.C) {
 	// Check that reindexing is idempotent
 	err = s.storage.Reindex()
 	c.Assert(err, gc.IsNil)
-	idemkeydocs, err := s.storage.fetchKeydocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	idemkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	c.Assert(err, gc.IsNil)
 	c.Assert(idemkeydocs, gc.DeepEquals, newkeydocs)
 }
