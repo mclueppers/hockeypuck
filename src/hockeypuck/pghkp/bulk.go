@@ -23,6 +23,7 @@ import (
 	"hockeypuck/hkp/jsonhkp"
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
+	"hockeypuck/pghkp/types"
 	"strings"
 	"time"
 
@@ -492,7 +493,7 @@ func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result
 			unprocessed++
 			continue
 		}
-		jsonStrs[i], theKeywords[i] = string(jsonBuf), keywordsTSVector(key)
+		jsonStrs[i], theKeywords[i] = string(jsonBuf), types.KeywordsTSVector(key)
 		keyInsArgs = keyInsArgs[:i+1] // re-slice +1
 		keyInsArgs[i] = keyInsertArgs{&key.RFingerprint, &jsonStrs[i], &key.MD5, &theKeywords[i]}
 

@@ -40,6 +40,7 @@ import (
 	"hockeypuck/hkp/jsonhkp"
 	pksstorage "hockeypuck/hkp/pks/storage"
 	"hockeypuck/openpgp"
+	"hockeypuck/pghkp/types"
 )
 
 func Test(t *stdtesting.T) {
@@ -105,13 +106,13 @@ func (s *S) addKey(c *gc.C, keyname string) []byte {
 	return data
 }
 
-func (s *S) queryAllKeys(c *gc.C) []*keyDoc {
+func (s *S) queryAllKeys(c *gc.C) []*types.KeyDoc {
 	rows, err := s.db.Query("SELECT rfingerprint, ctime, mtime, idxtime, md5, doc, keywords FROM keys")
 	c.Assert(err, gc.IsNil)
 	defer rows.Close()
-	var result []*keyDoc
+	var result []*types.KeyDoc
 	for rows.Next() {
-		var doc keyDoc
+		var doc types.KeyDoc
 		err = rows.Scan(&doc.RFingerprint, &doc.CTime, &doc.MTime, &doc.IdxTime, &doc.MD5, &doc.Doc, &doc.Keywords)
 		c.Assert(err, gc.IsNil)
 		result = append(result, &doc)
@@ -120,7 +121,7 @@ func (s *S) queryAllKeys(c *gc.C) []*keyDoc {
 	return result
 }
 
-func (d *keyDoc) assertParse(c *gc.C) *jsonhkp.PrimaryKey {
+func assertParse(d *types.KeyDoc, c *gc.C) *jsonhkp.PrimaryKey {
 	var pk jsonhkp.PrimaryKey
 	err := json.Unmarshal([]byte(d.Doc), &pk)
 	c.Assert(err, gc.IsNil)
@@ -139,7 +140,7 @@ func (s *S) TestMD5(c *gc.C) {
 	keyDocs := s.queryAllKeys(c)
 	c.Assert(keyDocs, gc.HasLen, 1)
 	c.Assert(keyDocs[0].MD5, gc.Equals, "da84f40d830a7be2a3c0b7f2e146bfaa")
-	jsonDoc := keyDocs[0].assertParse(c)
+	jsonDoc := assertParse(keyDocs[0], c)
 	c.Assert(jsonDoc.MD5, gc.Equals, "da84f40d830a7be2a3c0b7f2e146bfaa")
 
 	res, err = http.Get(s.srv.URL + "/pks/lookup?op=hget&search=da84f40d830a7be2a3c0b7f2e146bfaa")
@@ -192,7 +193,7 @@ func (s *S) TestResolve(c *gc.C) {
 
 	keyDocs := s.queryAllKeys(c)
 	c.Assert(keyDocs, gc.HasLen, 1)
-	c.Assert(keyDocs[0].assertParse(c).LongKeyID, gc.Equals, "f79362da44a2d1db")
+	c.Assert(assertParse(keyDocs[0], c).LongKeyID, gc.Equals, "f79362da44a2d1db")
 
 	// Should match
 	for _, search := range []string{
@@ -256,7 +257,7 @@ func (s *S) TestResolveWithHyphen(c *gc.C) {
 
 	keyDocs := s.queryAllKeys(c)
 	c.Assert(keyDocs, gc.HasLen, 1)
-	c.Assert(keyDocs[0].assertParse(c).LongKeyID, gc.Equals, "3287f5a32632c2c3")
+	c.Assert(assertParse(keyDocs[0], c).LongKeyID, gc.Equals, "3287f5a32632c2c3")
 	c.Assert(keyDocs[0].Keywords, gc.Equals, "'12345' 'encryption' 'example.com' 'steven' 'steven-12345' 'steven-12345 (test encryption) <steven-test@example.com>' 'steven-test' 'steven-test@example.com' 'test'")
 
 	// Should match
@@ -309,7 +310,7 @@ func (s *S) TestResolveBareEmail(c *gc.C) {
 
 	keyDocs := s.queryAllKeys(c)
 	c.Assert(keyDocs, gc.HasLen, 1)
-	c.Assert(keyDocs[0].assertParse(c).LongKeyID, gc.Equals, "a4eb82d2573f7c77")
+	c.Assert(assertParse(keyDocs[0], c).LongKeyID, gc.Equals, "a4eb82d2573f7c77")
 	c.Assert(keyDocs[0].Keywords, gc.Equals, "'posteo.de' 'support' 'support@posteo.de'")
 
 	// Should match

@@ -29,6 +29,7 @@ import (
 	"hockeypuck/hkp/jsonhkp"
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
+	"hockeypuck/pghkp/types"
 )
 
 //
@@ -101,7 +102,7 @@ func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert 
 	}
 
 	jsonStr := string(jsonBuf)
-	keywords := keywordsTSVector(key)
+	keywords := types.KeywordsTSVector(key)
 	result, err := stmt.Exec(&key.RFingerprint, &now, &now, &now, &key.MD5, &jsonStr, &keywords)
 	if err != nil {
 		return false, errors.Wrapf(err, "cannot insert rfp=%q", key.RFingerprint)
@@ -265,7 +266,7 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 	if err != nil {
 		return errors.Wrapf(err, "cannot serialize rfp=%q", key.RFingerprint)
 	}
-	keywords := keywordsTSVector(key)
+	keywords := types.KeywordsTSVector(key)
 	result, err := tx.Exec("UPDATE keys SET mtime = $1, idxtime = $2, md5 = $3, keywords = $4::TSVECTOR, doc = $5 "+
 		"WHERE md5 = $6",
 		&now, &now, &key.MD5, &keywords, jsonBuf, lastMD5)

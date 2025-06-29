@@ -32,6 +32,7 @@ import (
 	"hockeypuck/hkp/jsonhkp"
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
+	"hockeypuck/pghkp/types"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -162,7 +163,7 @@ func (st *storage) MatchKeyword(search []string) ([]string, error) {
 
 	for _, term := range search {
 		err = func() error {
-			query, err := keywordsTSQuery(term)
+			query, err := types.KeywordsTSQuery(term)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -260,7 +261,7 @@ func (st *storage) FetchKeys(rfps []string, options ...string) ([]*openpgp.Prima
 		}
 
 		rfp := openpgp.Reverse(pk.Fingerprint)
-		key, err := readOneKey(pk.Bytes(), rfp)
+		key, err := types.ReadOneKey(pk.Bytes(), rfp)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -318,7 +319,7 @@ func (st *storage) FetchRecords(rfps []string, options ...string) ([]*hkpstorage
 		}
 
 		rfp := openpgp.Reverse(pk.Fingerprint)
-		key, err := readOneKey(pk.Bytes(), rfp)
+		key, err := types.ReadOneKey(pk.Bytes(), rfp)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}

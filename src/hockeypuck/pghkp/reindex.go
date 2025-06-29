@@ -20,7 +20,6 @@ package pghkp
 import (
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"iter"
 	"maps"
@@ -29,11 +28,9 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
-	"golang.org/x/exp/slices"
 
-	"hockeypuck/hkp/jsonhkp"
 	hkpstorage "hockeypuck/hkp/storage"
-	"hockeypuck/openpgp"
+	"hockeypuck/pghkp/types"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -42,7 +39,7 @@ import (
 // Reindexer implementation
 //
 
-func (st *storage) fetchKeyDocs(rfps []string) ([]*keyDoc, error) {
+func (st *storage) fetchKeyDocs(rfps []string) ([]*types.KeyDoc, error) {
 	var rfpIn []string
 	for _, rfp := range rfps {
 		_, err := hex.DecodeString(rfp)
@@ -57,10 +54,10 @@ func (st *storage) fetchKeyDocs(rfps []string) ([]*keyDoc, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	var result []*keyDoc
+	var result []*types.KeyDoc
 	defer rows.Close()
 	for rows.Next() {
-		var kd keyDoc
+		var kd types.KeyDoc
 		err = rows.Scan(&kd.RFingerprint, &kd.Doc, &kd.MD5, &kd.CTime, &kd.MTime, &kd.IdxTime, &kd.Keywords)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, errors.WithStack(err)
@@ -75,11 +72,11 @@ func (st *storage) fetchKeyDocs(rfps []string) ([]*keyDoc, error) {
 	return result, nil
 }
 
-func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*keyDoc], result *hkpstorage.InsertError) bool {
+func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
 	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
 	defer keyDocsPullStop()
 	pullOk := true
-	var kd *keyDoc
+	var kd *types.KeyDoc
 	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
 		totKeyArgs := 0
 		keysValueStrings := make([]string, 0, keysInBunch)
@@ -139,7 +136,7 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 	return true
 }
 
-func (st *storage) bulkReindex(keyDocs map[string]*keyDoc, result *hkpstorage.InsertError) (int, bool) {
+func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
 	log.Infof("attempting bulk reindex of %d keys", len(keyDocs))
 	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
 	err := st.bulkCreateTempTables()
@@ -164,52 +161,13 @@ func (st *storage) bulkReindex(keyDocs map[string]*keyDoc, result *hkpstorage.In
 	return keysReindexed, true
 }
 
-// refresh updates the keyDoc fields that cache values from the jsonb document.
-// This is called by refreshBunch to ensure the DB columns are correctly populated,
-// for example after changes to the keyword indexing policy, or to the DB schema.
-func (kd *keyDoc) refresh() (changed bool, err error) {
-	// Unmarshal the doc
-	var pk jsonhkp.PrimaryKey
-	err = json.Unmarshal([]byte(kd.Doc), &pk)
-	if err != nil {
-		return false, err
-	}
-	rfp := openpgp.Reverse(pk.Fingerprint)
-	key, err := readOneKey(pk.Bytes(), rfp)
-	if err != nil {
-		return false, err
-	}
-	if key == nil {
-		// This should never happen, but has been observed in testing.
-		// Something is corrupt in the DB!
-		log.Errorf("nil returned successfully from readOneKey(%v)", pk)
-		return false, errors.Errorf("nil returned successfully from readOneKey(%v)", pk)
-	}
-
-	// Regenerate keywords
-	newKeywords, _, _ := keywordsFromKey(key)
-	oldKeywords := keywordsFromTSVector(kd.Keywords)
-	slices.Sort(newKeywords)
-	slices.Sort(oldKeywords)
-	if !slices.Equal(oldKeywords, newKeywords) {
-		log.Debugf("keyword mismatch on fp=%s, was %q now %q", pk.Fingerprint, oldKeywords, newKeywords)
-		kd.Keywords, err = keywordsToTSVector(newKeywords, " ")
-		changed = true
-	}
-
-	// In future we may add further tasks here.
-	// DO NOT update the md5 field, as this is used by bulkReindex to prevent simultaneous updates.
-
-	return changed, err
-}
-
 // refreshBunch fetches a bunch of keyDocs from the DB and returns freshened copies of the ones with stale records.
 //
 // TODO: ModifiedSince habitually yields the same entries multiple times (FIXME!),
 // so we use a map (not an array) to deduplicate the returned keyDocs,
 // and explicitly compare timestamps instead of assuming monotonicity.
 // (reverting these mitigations will almost certainly improve the performance)
-func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*keyDoc, result *hkpstorage.InsertError) (count int, finished bool) {
+func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (count int, finished bool) {
 	// ModifiedSince uses LIMIT, so this is safe
 	rfps, err := st.ModifiedSince(*bookmark)
 	if err != nil {
@@ -231,7 +189,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*keyD
 		if bookmark.Before(kd.MTime) {
 			*bookmark = kd.MTime
 		}
-		changed, err := kd.refresh()
+		changed, err := kd.Refresh()
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 		} else if changed {
@@ -247,7 +205,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*keyD
 // It always returns nil, as reindex failure is not fatal.
 func (st *storage) Reindex() error {
 	bookmark := time.Time{}
-	newKeyDocs := make(map[string]*keyDoc, keysInBunch)
+	newKeyDocs := make(map[string]*types.KeyDoc, keysInBunch)
 	result := hkpstorage.InsertError{}
 	total := 0
 
@@ -271,7 +229,7 @@ func (st *storage) Reindex() error {
 				}
 			}
 			log.Infof("%d keys reindexed in %v; total scanned %d", n, time.Since(t), total)
-			newKeyDocs = make(map[string]*keyDoc, keysInBunch)
+			newKeyDocs = make(map[string]*types.KeyDoc, keysInBunch)
 		}
 		if finished {
 			log.Infof("reindexing complete")
