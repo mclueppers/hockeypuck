@@ -38,10 +38,10 @@ func (s *S) TestTSVectorParsing(c *gc.C) {
 		`two\tlines\n`,
 	}
 	tsv := `'didn''t, wouldn''t, can''t' 'test' 'two\\tlines\\n'`
-	kw2 := KeywordsFromTSVector(tsv)
+	kw2 := keywordsFromTSVector(tsv)
 	slices.Sort(kw2)
 	c.Assert(kw2, gc.DeepEquals, kw)
-	tsv2, err := KeywordsToTSVector(kw, " ")
+	tsv2, err := keywordsToTSVector(kw, " ")
 	c.Assert(err, gc.IsNil)
 	c.Assert(tsv2, gc.Equals, tsv)
 }

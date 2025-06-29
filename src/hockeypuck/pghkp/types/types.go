@@ -65,8 +65,8 @@ func ReadOneKey(b []byte, rfingerprint string) (*openpgp.PrimaryKey, error) {
 	return keys[0], nil
 }
 
-// KeywordsFromTSVector converts a PostgreSQL tsvector back into a slice of tokens.
-func KeywordsFromTSVector(tsv string) (result []string) {
+// keywordsFromTSVector converts a PostgreSQL tsvector back into a slice of tokens.
+func keywordsFromTSVector(tsv string) (result []string) {
 	m := make(map[string]bool)
 	var s string
 	for {
@@ -105,12 +105,12 @@ func KeywordsFromTSVector(tsv string) (result []string) {
 	return
 }
 
-// KeywordsFromKey returns slices of keyword tokens, email addresses, and UIDs
+// keywordsFromKey returns slices of keyword tokens, email addresses, and UIDs
 // extracted from the UserID packets of the given key.
 //
 // TODO: shouldn't this be a method on openpgp.PrimaryKey instead?
 // It's not specific to PostgreSQL, or even to storage.
-func KeywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []string, uids []string) {
+func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []string, uids []string) {
 	keywordMap := make(map[string]bool)
 	emailMap := make(map[string]bool)
 	uidMap := make(map[string]bool)
@@ -173,11 +173,11 @@ func KeywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []strin
 	return
 }
 
-// KeywordsFromSearch returns slices of keyword tokens and email addresses
+// keywordsFromSearch returns slices of keyword tokens and email addresses
 // extracted from the supplied search string.
 //
 // TODO: shouldn't this also be generic?
-func KeywordsFromSearch(search string) (keywords []string, emails []string) {
+func keywordsFromSearch(search string) (keywords []string, emails []string) {
 	keywordMap := make(map[string]bool)
 	emailMap := make(map[string]bool)
 	s := strings.ToLower(search)
@@ -211,8 +211,8 @@ func KeywordsFromSearch(search string) (keywords []string, emails []string) {
 }
 
 func KeywordsTSVector(key *openpgp.PrimaryKey) string {
-	keywords, _, _ := KeywordsFromKey(key)
-	tsv, err := KeywordsToTSVector(keywords, " ")
+	keywords, _, _ := keywordsFromKey(key)
+	tsv, err := keywordsToTSVector(keywords, " ")
 	if err != nil {
 		// In this case we've found a key that generated
 		// an invalid tsvector - this is pretty much guaranteed
@@ -228,8 +228,8 @@ func KeywordsTSVector(key *openpgp.PrimaryKey) string {
 }
 
 func KeywordsTSQuery(query string) (string, error) {
-	keywords, _ := KeywordsFromSearch(query)
-	tsq, err := KeywordsToTSVector(keywords, " & ")
+	keywords, _ := keywordsFromSearch(query)
+	tsq, err := keywordsToTSVector(keywords, " & ")
 	if err != nil {
 		log.Warningf("cannot convert search string to tsquery: %v", err)
 		return "", err
@@ -270,13 +270,13 @@ func desanitiseFromTSVector(s string) string {
 	return s
 }
 
-// KeywordsToTSVector converts a slice of keywords to a
+// keywordsToTSVector converts a slice of keywords to a
 // PostgreSQL tsvector. If the resulting tsvector would
 // be considered invalid by PostgreSQL an error is
 // returned instead.
 // `sep` SHOULD be either " " or "&". If "&", the output
 // string is a tsquery rather than a tsvector.
-func KeywordsToTSVector(keywords []string, sep string) (string, error) {
+func keywordsToTSVector(keywords []string, sep string) (string, error) {
 	const (
 		lexemeLimit   = 2048            // 2KB for single lexeme
 		tsvectorLimit = 1 * 1024 * 1024 // 1MB for lexemes + positions
@@ -314,18 +314,18 @@ func (kd *KeyDoc) Refresh() (changed bool, err error) {
 	if key == nil {
 		// This should never happen, but has been observed in testing.
 		// Something is corrupt in the DB!
-		log.Errorf("nil returned successfully from readOneKey(%v)", pk)
-		return false, errors.Errorf("nil returned successfully from readOneKey(%v)", pk)
+		log.Errorf("nil returned successfully from ReadOneKey(%v)", pk)
+		return false, errors.Errorf("nil returned successfully from ReadOneKey(%v)", pk)
 	}
 
 	// Regenerate keywords
-	newKeywords, _, _ := KeywordsFromKey(key)
-	oldKeywords := KeywordsFromTSVector(kd.Keywords)
+	newKeywords, _, _ := keywordsFromKey(key)
+	oldKeywords := keywordsFromTSVector(kd.Keywords)
 	slices.Sort(newKeywords)
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
 		log.Debugf("keyword mismatch on fp=%s, was %q now %q", pk.Fingerprint, oldKeywords, newKeywords)
-		kd.Keywords, err = KeywordsToTSVector(newKeywords, " ")
+		kd.Keywords, err = keywordsToTSVector(newKeywords, " ")
 		changed = true
 	}
 

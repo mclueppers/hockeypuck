@@ -87,7 +87,8 @@ func (st *storage) PKSGet(addr string) (*pksstorage.Status, error) {
 
 	var result *pksstorage.Status
 	defer rows.Close()
-	for rows.Next() {
+	// Only process the first result; the storage SHOULD NOT contain duplicate records
+	if rows.Next() {
 		var addr string
 		var lastErrorString sql.NullString
 		var lastError error
@@ -104,8 +105,6 @@ func (st *storage) PKSGet(addr string) (*pksstorage.Status, error) {
 			LastSync:  lastSync,
 			LastError: lastError,
 		}
-		// Only process the first result; the storage SHOULD NOT contain duplicate records
-		break
 	}
 	return result, nil
 }
