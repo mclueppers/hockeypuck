@@ -35,6 +35,8 @@ func IsNotFound(err error) bool {
 	return errors.Is(err, ErrKeyNotFound)
 }
 
+// Record is a PrimaryKey annotated with selected fields returned by the DB layer.
+// It is not a faithful representation of the underlying DB schema.
 type Record struct {
 	*openpgp.PrimaryKey
 
@@ -50,6 +52,7 @@ type Storage interface {
 	Updater
 	Deleter
 	Notifier
+	Reindexer
 	pksstorage.Storage
 }
 
@@ -315,4 +318,8 @@ func DeleteKey(storage Storage, fp string) (KeyChange, error) {
 		return nil, errors.WithStack(err)
 	}
 	return KeyRemoved{ID: fp, Digest: lastMD5}, nil
+}
+
+type Reindexer interface {
+	StartReindex()
 }

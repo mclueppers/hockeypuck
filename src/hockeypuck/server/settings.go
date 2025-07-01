@@ -80,15 +80,17 @@ type SMTPConfig struct {
 }
 
 const (
-	DefaultDBDriver        = "postgres-jsonb"
-	DefaultDBDSN           = "database=hockeypuck host=/var/run/postgresql port=5432 sslmode=disable"
-	DefaultMaxKeyLength    = 1048576
-	DefaultMaxPacketLength = 8192
+	DefaultDBDriver           = "postgres-jsonb"
+	DefaultDBDSN              = "database=hockeypuck host=/var/run/postgresql port=5432 sslmode=disable"
+	DefaultMaxKeyLength       = 1048576
+	DefaultMaxPacketLength    = 8192
+	DefaultDBReindexOnStartup = true
 )
 
 type DBConfig struct {
-	Driver string `toml:"driver"`
-	DSN    string `toml:"dsn"`
+	Driver           string `toml:"driver"`
+	DSN              string `toml:"dsn"`
+	ReindexOnStartup bool   `toml:"reindexOnStartup"`
 }
 
 const (
@@ -153,8 +155,9 @@ func DefaultOpenPGP() OpenPGPConfig {
 			Version: DefaultArmorHeaderVersion,
 		},
 		DB: DBConfig{
-			Driver: DefaultDBDriver,
-			DSN:    DefaultDBDSN,
+			Driver:           DefaultDBDriver,
+			DSN:              DefaultDBDSN,
+			ReindexOnStartup: DefaultDBReindexOnStartup,
 		},
 		MaxKeyLength:    DefaultMaxKeyLength,
 		MaxPacketLength: DefaultMaxPacketLength,

@@ -217,6 +217,9 @@ func (m *Storage) RenotifyAll() error {
 	}
 	return nil
 }
+func (m *Storage) StartReindex() {
+	return
+}
 func (m *Storage) PKSInit(addr string, lastSync time.Time) error {
 	m.record("PKSInit", addr, lastSync)
 	if m.pksInit != nil {

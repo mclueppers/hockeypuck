@@ -57,7 +57,7 @@ Add this to your ansible playbook to deploy hockeypuck using the [`sebix.hockeyp
 
 ## Any platform/arch
 
-With Go 1.21 installed, simply run:
+With Go 1.24 installed, simply run:
 
     make build
 
@@ -169,4 +169,5 @@ You can also use the `osenv` custom function to read environment variables by pr
 
 # About
 
-Copyright 2024, The Hockeypuck Developers; see CONTRIBUTORS and LICENSE for details.
+Copyright 2012-2025 Casey Marshall and the Hockeypuck Contributors.
+See CONTRIBUTORS and LICENSE for details.
