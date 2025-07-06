@@ -1,6 +1,24 @@
+/*
+   Hockeypuck - OpenPGP key server
+   Copyright (C) 2012-2025  Casey Marshall and Hockeypuck Contributors
+
+   This program is free software: you can redistribute it and/or modify
+   it under the terms of the GNU Affero General Public License as published by
+   the Free Software Foundation, version 3.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU Affero General Public License for more details.
+
+   You should have received a copy of the GNU Affero General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 package server
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -25,6 +43,11 @@ import (
 	"hockeypuck/openpgp"
 	"hockeypuck/pghkp"
 
+	"github.com/dobrevit/hkp-plugin-core/pkg/config"
+	"github.com/dobrevit/hkp-plugin-core/pkg/events"
+	"github.com/dobrevit/hkp-plugin-core/pkg/integration"
+	"github.com/dobrevit/hkp-plugin-core/pkg/management"
+	pluginapi "github.com/dobrevit/hkp-plugin-core/pkg/plugin"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -40,6 +63,11 @@ type Server struct {
 
 	t                 tomb.Tomb
 	hkpAddr, hkpsAddr string
+
+	// Plugin system integration
+	pluginHost      pluginapi.PluginHost      // Host for plugins, implements PluginHost interface
+	pluginSystem    *integration.PluginSystem // Plugin system integration
+	pluginLifecycle *management.PluginManager // Plugin lifecycle management
 }
 
 type statusCodeResponseWriter struct {
@@ -92,10 +120,12 @@ func NewServer(settings *Settings) (*Server, error) {
 		defaults := DefaultSettings()
 		settings = &defaults
 	}
+
 	s := &Server{
 		settings: settings,
 		r:        httprouter.New(),
 	}
+	s.pluginHost = NewServerPluginHost(s)
 
 	var err error
 	s.st, err = DialStorage(settings)
@@ -190,6 +220,24 @@ func NewServer(settings *Settings) (*Server, error) {
 
 	registerMetrics()
 	s.st.Subscribe(metricsStorageNotifier)
+
+	// Initialize event bus
+	eventBus := events.NewEventBus(log.StandardLogger())
+	s.pluginHost.(*ServerPluginHost).SetEventBus(eventBus)
+
+	// Subscribe storage to bridge key changes to the event bus
+	s.st.Subscribe(func(change storage.KeyChange) error {
+		// Create a storage adapter to handle the conversion
+		adapter := NewStorageAdapter(s.st)
+		pluginChange := adapter.ConvertHKPChangeToPlugin(change)
+		return eventBus.NotifyKeyChange(pluginChange)
+	})
+
+	// Initialize plugin system with built-in plugins
+	if err := s.initPlugins(context.Background()); err != nil {
+		log.WithError(err).Warn("Failed to initialize plugins")
+		// Continue startup even if plugins fail
+	}
 
 	return s, nil
 }
@@ -506,6 +554,15 @@ var ErrStopping = fmt.Errorf("stopping server")
 func (s *Server) Stop() {
 	defer s.closeLog()
 
+	// Shutdown plugins first
+	if s.pluginSystem != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.pluginSystem.Shutdown(ctx); err != nil {
+			log.WithError(err).Error("Error shutting down plugins")
+		}
+	}
+
 	if s.sksPeer != nil {
 		s.sksPeer.Stop()
 	}
@@ -577,4 +634,67 @@ func (s *Server) listenAndServeHKPS() error {
 	s.hkpsAddr = ln.Addr().String()
 	ln = tls.NewListener(ln, config)
 	return http.Serve(ln, s.middle)
+}
+
+// initPlugins initializes the plugin system using the integration package
+func (s *Server) initPlugins(ctx context.Context) error {
+	host := s.pluginHost
+	settings := s.convertToPluginSettings()
+
+	pluginSystem, err := integration.InitializePlugins(ctx, host, settings)
+	if err != nil {
+		return err
+	}
+
+	s.pluginSystem = pluginSystem
+
+	// Initialize plugin lifecycle management
+	if pluginSystem != nil {
+		pluginManager, err := management.NewPluginManager(pluginSystem, settings, log.StandardLogger())
+		if err != nil {
+			return fmt.Errorf("failed to create plugin lifecycle manager: %w", err)
+		}
+		s.pluginLifecycle = pluginManager
+
+		// Register plugin management endpoints
+		if err := s.registerPluginManagementEndpoints(); err != nil {
+			return fmt.Errorf("failed to register plugin management endpoints: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// convertToPluginSettings converts Hockeypuck settings to plugin settings
+func (s *Server) convertToPluginSettings() *config.Settings {
+	// Convert Hockeypuck settings to plugin settings format
+	// This is a minimal conversion - in practice you'd map more fields
+	settings := &config.Settings{
+		DataDir: "/var/lib/hockeypuck", // Default data directory
+		Plugins: config.PluginConfig{
+			Enabled:   true,
+			Directory: "./plugins",
+			LoadOrder: []string{}, // Empty for now - plugins will be loaded from .so files
+		},
+	}
+
+	return settings
+}
+
+// registerPluginManagementEndpoints registers HTTP endpoints for plugin management
+func (s *Server) registerPluginManagementEndpoints() error {
+	if s.pluginLifecycle == nil {
+		return nil
+	}
+
+	// Register plugin management endpoints
+	s.r.GET("/plugins/status", s.pluginLifecycle.HandleStatus)
+	s.r.GET("/plugins/health", s.pluginLifecycle.HandleHealth)
+	s.r.GET("/plugins/list", s.pluginLifecycle.HandleList)
+	s.r.POST("/plugins/reload", s.pluginLifecycle.HandleReload)
+	s.r.GET("/plugins/config", s.pluginLifecycle.HandleConfig)
+	s.r.PUT("/plugins/config", s.pluginLifecycle.HandleConfigUpdate)
+
+	log.Info("Plugin management endpoints registered")
+	return nil
 }
