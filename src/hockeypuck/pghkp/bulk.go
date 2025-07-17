@@ -143,6 +143,18 @@ const bulkTxJournalKeys string = `INSERT INTO keys_checked (rfingerprint, doc, m
 SELECT rfingerprint, '{}', md5, ctime, mtime, idxtime FROM keys WHERE rfingerprint IN ( SELECT rfingerprint FROM keys_copyin )
 `
 
+// bulkTxClearOrphanSubkeys deletes all subkeys of keys that are referenced from the keys_old table but are not in the keys_copyin table.
+// It MUST be called before calling bulkTxClearKeys (see below).
+const bulkTxClearOrphanSubkeys string = `DELETE FROM subkeys WHERE rfingerprint IN
+	( SELECT rfingerprint FROM keys_old WHERE rfingerprint NOT IN ( SELECT rfingerprint from keys_copyin ) )
+`
+
+// bulkTxClearKeys deletes all keys that are referenced from the keys_old table but are not in the keys_copyin table.
+// You MUST call bulkTxClearOrphanSubkeys first (see above).
+const bulkTxClearKeys string = `DELETE FROM keys WHERE rfingerprint IN
+	( SELECT rfingerprint FROM keys_old WHERE rfingerprint NOT IN ( SELECT rfingerprint from keys_copyin ) )
+`
+
 // bulkTxUpdateKeys is the query for final bulk key update, from a temporary table to the DB.
 // Does not update ctime or rfingerprint.
 const bulkTxUpdateKeys string = `UPDATE keys SET
@@ -151,10 +163,10 @@ FROM keys_copyin as c
 WHERE keys.rfingerprint = c.rfingerprint
 `
 
-// bulkTxClearSubkeys is the query to clear existing subkey entries from the subkeys table
+// bulkTxClearDupSubkeys is the query to clear existing subkey entries from the subkeys table
 // if they are not still present in the subkeys_copyin table after deduplication
 // (i.e. they would have been queued for addition if they were not already present in subkeys).
-const bulkTxClearSubkeys string = `DELETE FROM subkeys WHERE rfingerprint IN
+const bulkTxClearDupSubkeys string = `DELETE FROM subkeys WHERE rfingerprint IN
 	( SELECT rfingerprint FROM subkeys_copyin UNION ALL SELECT rfingerprint FROM subkeys_checked )
 	AND rsubfp NOT IN (SELECT rsubfp FROM subkeys_copyin)
 `
@@ -211,6 +223,7 @@ const bulkUpdQueryKeyRemoved string = `SELECT md5 FROM keys_checked WHERE md5 NO
 
 const keys_copyin_temp_table_name string = "keys_copyin"
 const subkeys_copyin_temp_table_name string = "subkeys_copyin"
+const keys_old_temp_table_name string = "keys_old"
 
 // keysInBunch is the maximum number of keys sent in a bunch during bulk insertion.
 // Since keys (and subkeys) are sent to the DB in prepared statements with parameters and
@@ -264,6 +277,11 @@ rfingerprint TEXT NOT NULL,
 rsubfp TEXT NOT NULL PRIMARY KEY
 )
 `,
+	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_old
+(
+rfingerprint TEXT NOT NULL PRIMARY KEY
+)
+`,
 }
 
 var drTempTablesSQL = []string{
@@ -274,6 +292,8 @@ var drTempTablesSQL = []string{
 	`DROP TABLE IF EXISTS subkeys_checked CASCADE
 `,
 	`DROP TABLE IF EXISTS keys_checked CASCADE
+`,
+	`DROP TABLE IF EXISTS keys_old CASCADE
 `,
 }
 
@@ -438,8 +458,8 @@ func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSu
 
 	// Batch UPDATE all keys from memory tables (should need no checks!!!!)
 	// Final batch-update in keys/subkeys tables without any checks: _must not_ give any errors
-	txStrs := []string{bulkTxJournalKeys, bulkTxUpdateKeys, bulkTxClearSubkeys, bulkTxInsertSubkeys}
-	msgStrs := []string{"bulkTx-journal-keys", "bulkTx-update-keys", "bulkTx-clear-subkeys", "bulkTx-insert-subkeys"}
+	txStrs := []string{bulkTxJournalKeys, bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys}
+	msgStrs := []string{"bulkTx-journal-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -542,6 +562,26 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 	return true
 }
 
+func (st *storage) bulkInsertCopyOld(oldKeys []string, result *hkpstorage.InsertError) (ok bool) {
+	keysValueStrings := make([]string, 0, keysInBunch)
+	keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
+	for index, fp := range oldKeys {
+		keysValueStrings = append(keysValueStrings, fmt.Sprintf("($%d::TEXT)", index+1))
+		keysValueArgs = append(keysValueArgs, openpgp.Reverse(fp))
+	}
+
+	log.Debugf("attempting upload of %d old fps", len(oldKeys))
+
+	keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint) VALUES %s",
+		keys_old_temp_table_name, strings.Join(keysValueStrings, ","))
+	err := st.bulkInsertSendBunchTx(keystmt, "keys", keysValueArgs)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		return false
+	}
+	return true
+}
+
 func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError) (int, bool) {
 	var key *openpgp.PrimaryKey
 	keyInsArgs := make([]keyInsertArgs, 0, len(keys))
@@ -592,7 +632,9 @@ func (st *storage) bulkCreateTempTables() error {
 	return nil
 }
 
-func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError, update bool) (int, bool) {
+// bulkInsert inserts the given keys, and stores any errors in `result`
+// If `oldKeys` is a non-empty list of fingerprints, any keys in it but not in `keys` will be deleted.
+func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError, oldKeys []string) (int, bool) {
 	log.Infof("attempting bulk insertion of keys")
 	t := time.Now() // FIXME: Remove this
 	// Create 2 pairs of _temporary_ (in-mem) tables:
@@ -611,7 +653,10 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 	if _, ok = st.bulkInsertCopyKeysToServer(keys, result); !ok {
 		return 0, false
 	}
-	if update {
+	if len(oldKeys) != 0 {
+		if !st.bulkInsertCopyOld(oldKeys, result) {
+			return 0, false
+		}
 		// (b): From _copyin tables update existing on-disk records
 		//      check subkey constraints only
 		if subkeysWithNulls, ok = st.bulkUpdateKeysSubkeys(result); !ok {
@@ -636,12 +681,12 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 	}
 
 	if minDups == maxDups {
-		log.Infof("%d keys and %d subkeys bulk-inserted, %d duplicates skipped (%d keys and %d subkeys with NULLs) in %v",
-			keysInserted, subkeysInserted, minDups, keysWithNulls, subkeysWithNulls, time.Since(t))
+		log.Infof("%d keys and %d subkeys bulk-inserted, %d keys deleted, %d duplicates skipped (%d keys and %d subkeys with NULLs) in %v",
+			keysInserted, subkeysInserted, len(oldKeys)-keysInserted, minDups, keysWithNulls, subkeysWithNulls, time.Since(t))
 	} else {
-		log.Infof("%d keys and %d subkeys bulk-inserted, at least %d (and up to %d possible) duplicates skipped "+
+		log.Infof("%d keys and %d subkeys bulk-inserted, %d keys deleted, at least %d (and up to %d possible) duplicates skipped "+
 			"(%d keys and %d subkeys with NULLs) in %v",
-			keysInserted, subkeysInserted, minDups, maxDups, keysWithNulls, subkeysWithNulls, time.Since(t))
+			keysInserted, subkeysInserted, len(oldKeys)-keysInserted, minDups, maxDups, keysWithNulls, subkeysWithNulls, time.Since(t))
 	}
 
 	err = st.bulkDropTempTables()
