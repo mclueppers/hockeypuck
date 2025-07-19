@@ -640,6 +640,10 @@ func (s *S) setupReload(c *gc.C) (oldkeydocs []*types.KeyDoc) {
 	_, _, err := s.storage.Insert(keys)
 	c.Assert(err, gc.IsNil)
 
+	// Check that there are three records in the database
+	keyDocs := s.queryAllKeys(c)
+	c.Assert(keyDocs, gc.HasLen, 3)
+
 	oldkeydocs, err = s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	c.Assert(err, gc.IsNil)
 	c.Assert(oldkeydocs, gc.HasLen, 1)
@@ -677,6 +681,10 @@ func (s *S) checkReload(c *gc.C, oldkeydocs []*types.KeyDoc) {
 	c.Assert(keys[0].KeyID(), gc.Equals, "361bc1f023e0dcca")
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	c.Assert(keys[0].UserIDs[0].Signatures, gc.HasLen, 2)
+
+	// Check that there are only two records in the database
+	keyDocs := s.queryAllKeys(c)
+	c.Assert(keyDocs, gc.HasLen, 2)
 }
 
 func (s *S) TestReload(c *gc.C) {
@@ -690,6 +698,32 @@ func (s *S) TestReload(c *gc.C) {
 	s.checkReload(c, oldkeydocs)
 }
 
+// Same as above, but calling the bulk reload method directly.
+// All the test keys fit in the one bunch, so we don't need an outer loop.
+func (s *S) TestReloadBulk(c *gc.C) {
+	oldkeydocs := s.setupReload(c)
+
+	bookmark := time.Time{}
+	newRecords := make([]*hkpstorage.Record, 0, keysInBunch)
+	result := hkpstorage.InsertError{}
+	count, finished := s.storage.getReloadBunch(&bookmark, &newRecords, &result)
+	c.Assert(count, gc.Equals, 3)
+	c.Assert(finished, gc.Equals, false)
+	newKeys, oldKeys := validateRecords(newRecords)
+	n, d, ok := s.storage.bulkInsert(newKeys, &result, oldKeys)
+	c.Assert(ok, gc.Equals, true)
+	c.Assert(result.Errors, gc.HasLen, 0)
+	c.Assert(n, gc.Equals, 2)
+	c.Assert(d, gc.Equals, 1) // the evaporating key should have been deleted
+
+	// check that there are no more keys
+	count, finished = s.storage.getReloadBunch(&bookmark, &newRecords, &result)
+	c.Assert(count, gc.Equals, 0)
+	c.Assert(finished, gc.Equals, true)
+
+	s.checkReload(c, oldkeydocs)
+}
+
 // Same as above, but calling the fallback reload method directly.
 // All the test keys fit in the one bunch, so we don't need an outer loop.
 func (s *S) TestReloadIncremental(c *gc.C) {
@@ -698,13 +732,20 @@ func (s *S) TestReloadIncremental(c *gc.C) {
 	bookmark := time.Time{}
 	newRecords := make([]*hkpstorage.Record, 0, keysInBunch)
 	result := hkpstorage.InsertError{}
-	_, _ = s.storage.getReloadBunch(&bookmark, &newRecords, &result)
+	count, finished := s.storage.getReloadBunch(&bookmark, &newRecords, &result)
+	c.Assert(count, gc.Equals, 3)
+	c.Assert(finished, gc.Equals, false)
 	_, _ = validateRecords(newRecords)
 	n, d, ok := s.storage.reloadIncremental(newRecords, &result)
 	c.Assert(ok, gc.Equals, true)
 	c.Assert(result.Errors, gc.HasLen, 0)
 	c.Assert(n, gc.Equals, 2)
 	c.Assert(d, gc.Equals, 1) // the evaporating key should have been deleted
+
+	// check that there are no more keys
+	count, finished = s.storage.getReloadBunch(&bookmark, &newRecords, &result)
+	c.Assert(count, gc.Equals, 0)
+	c.Assert(finished, gc.Equals, true)
 
 	s.checkReload(c, oldkeydocs)
 }
