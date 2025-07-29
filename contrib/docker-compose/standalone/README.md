@@ -148,7 +148,7 @@ If you have more than one `docker-compose/standalone` stack, you can cluster the
 
 It is also possible to use the HAProxy configuration as a WAF-only shim,
 for insertion between an existing reverse proxy (e.g. Apache) and keyserver.
-For guidelines, please see `README_SHIM.md` in this directory.
+For guidelines, please see `README_SHIM.md` and `README_PROXY.md` in this directory.
 
 # Operation
 
