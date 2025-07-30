@@ -28,7 +28,8 @@ var (
 
 func main() {
 	flag.Parse()
-	settings := cmd.Init()
+	settings := cmd.Init(false)
+	cmd.HandleSignals()
 	err := dump(settings)
 	cmd.Die(err)
 }

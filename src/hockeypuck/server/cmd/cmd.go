@@ -24,9 +24,18 @@ var (
 	memProf    = flag.Bool("memprof", false, "enable mem profiling")
 )
 
-// Init handles common command line flags, logging, profiling etc. for all CLI tools.
+var cpuFile *os.File
+
+var Sigmap = map[os.Signal]func(){
+	syscall.SIGUSR2: func() {
+		cpuFile = StartCPUProf(*cpuProf, cpuFile)
+		WriteMemProf(*memProf)
+	},
+}
+
+// Init handles common command line flags, logging, profiling etc. for all CLI commands.
 // The caller MUST import "flag" and call flag.Parse() before calling Init().
-func Init() (settings *server.Settings) {
+func Init(isServer bool) (settings *server.Settings) {
 	if configFile != nil {
 		conf, err := os.ReadFile(*configFile)
 		if err != nil {
@@ -43,17 +52,28 @@ func Init() (settings *server.Settings) {
 	if *logLevel != "" {
 		settings.LogLevel = *logLevel
 	}
-	level, err := log.ParseLevel(strings.ToLower(settings.LogLevel))
-	if err != nil {
-		log.Warningf("invalid LogLevel=%q: %v", settings.LogLevel, err)
-	} else {
-		log.SetLevel(level)
+	if !isServer {
+		level, err := log.ParseLevel(strings.ToLower(settings.LogLevel))
+		if err != nil {
+			log.Warningf("invalid LogLevel=%q: %v", settings.LogLevel, err)
+		} else {
+			log.SetLevel(level)
+		}
 	}
 
-	cpuFile := StartCPUProf(*cpuProf, nil)
+	cpuFile = StartCPUProf(*cpuProf, nil)
+	return
+}
 
+func HandleSignals() {
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGUSR2)
+	keys := make([]os.Signal, len(Sigmap))
+	i := 0
+	for k := range Sigmap {
+		keys[i] = k
+		i++
+	}
+	signal.Notify(c, keys...)
 	go func() {
 		// BEWARE: go-staticcheck will suggest that you replace the following with `for range`.
 		// This is not how signal handling works (it is SUPPOSED to loop forever).
@@ -61,15 +81,12 @@ func Init() (settings *server.Settings) {
 		for {
 			select {
 			case sig := <-c:
-				switch sig {
-				case syscall.SIGUSR2:
-					cpuFile = StartCPUProf(*cpuProf, cpuFile)
-					WriteMemProf(*memProf)
+				if Sigmap[sig] != nil {
+					Sigmap[sig]()
 				}
 			}
 		}
 	}()
-	return
 }
 
 // Die prints the error and exits with a non-zero exit code

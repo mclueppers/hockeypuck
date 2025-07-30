@@ -25,7 +25,8 @@ func main() {
 		cmd.Die(errors.New("missing PGP key file arguments"))
 	}
 
-	settings := cmd.Init()
+	settings := cmd.Init(false)
+	cmd.HandleSignals()
 	err := load(settings, args)
 	cmd.Die(err)
 }

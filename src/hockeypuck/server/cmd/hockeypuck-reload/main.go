@@ -16,7 +16,8 @@ import (
 
 func main() {
 	flag.Parse()
-	settings := cmd.Init()
+	settings := cmd.Init(false)
+	cmd.HandleSignals()
 	err := reload(settings)
 	cmd.Die(err)
 }
