@@ -52,6 +52,7 @@ var _ hkpstorage.Storage = (*storage)(nil)
 // They MUST match the table definitions here.
 const keysNumColumns = 8
 const subkeysNumColumns = 3
+const useridsNumColumns = 4
 
 var crTablesSQL = []string{
 	// keys is always created with its initial six columns.

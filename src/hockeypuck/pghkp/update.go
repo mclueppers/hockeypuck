@@ -112,6 +112,14 @@ func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert 
 	}
 	defer subStmt.Close()
 
+	uidStmt, err := tx.Prepare("INSERT INTO userids (rfingerprint, uidstring, email, confidence) " +
+		"SELECT $1::TEXT, $2::TEXT, $3::TEXT, $4::INTEGER WHERE NOT EXISTS (SELECT 1 FROM userids WHERE rfingerprint = $1 and uidstring = $2)")
+	if err != nil {
+		log.Errorf("1 SQL: %q", errors.WithStack(err))
+		return false, errors.WithStack(err)
+	}
+	defer subStmt.Close()
+
 	openpgp.Sort(key)
 
 	now := time.Now().UTC()
@@ -122,7 +130,7 @@ func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert 
 	}
 
 	jsonStr := string(jsonBuf)
-	keywords := types.KeywordsTSVector(key)
+	keywords, uiddocs := types.KeywordsTSVector(key)
 	result, err := stmt.Exec(&key.RFingerprint, &now, &now, &now, &key.MD5, &jsonStr, &keywords, &key.VFingerprint)
 	if err != nil {
 		return false, errors.Wrapf(err, "cannot insert rfp=%q", key.RFingerprint)
@@ -143,6 +151,13 @@ func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert 
 		_, err := subStmt.Exec(&key.RFingerprint, &subKey.RFingerprint, &subKey.VFingerprint)
 		if err != nil {
 			return false, errors.Wrapf(err, "cannot insert rsubfp=%q", subKey.RFingerprint)
+		}
+	}
+	for _, uid := range uiddocs {
+		_, err := uidStmt.Exec(&key.RFingerprint, &uid.UidString, &uid.Email, &uid.Confidence)
+		if err != nil {
+			log.Errorf("2 SQL: %q", errors.WithStack(err))
+			return false, errors.Wrapf(err, "cannot insert uid=%q", uid.UidString)
 		}
 	}
 	return false, nil
@@ -289,7 +304,7 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 	if err != nil {
 		return errors.Wrapf(err, "cannot serialize rfp=%q", key.RFingerprint)
 	}
-	keywords := types.KeywordsTSVector(key)
+	keywords, uiddocs := types.KeywordsTSVector(key)
 	result, err := tx.Exec("UPDATE keys SET mtime = $1, idxtime = $2, md5 = $3, keywords = $4::TSVECTOR, doc = $5, vfingerprint = $6 "+
 		"WHERE md5 = $7",
 		&now, &now, &key.MD5, &keywords, jsonBuf, &key.VFingerprint,
@@ -309,6 +324,16 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 			"SELECT $1::TEXT, $2::TEXT, $3::TEXT WHERE NOT EXISTS (SELECT 1 FROM subkeys WHERE rsubfp = $2)",
 			&key.RFingerprint, &subKey.RFingerprint, &subKey.VFingerprint)
 		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	// TODO: this does not account for updating confidence over time, or for email parsing bugfixes
+	for _, uid := range uiddocs {
+		_, err := tx.Exec("INSERT INTO userids (rfingerprint, uidstring, email, confidence) "+
+			"SELECT $1::TEXT, $2::TEXT, $3::TEXT, $4::INTEGER WHERE NOT EXISTS (SELECT 1 FROM userids WHERE rfingerprint = $1 AND uidstring = $2)",
+			&uid.RFingerprint, &uid.UidString, &uid.Email, &uid.Confidence)
+		if err != nil {
+			log.Errorf("3 SQL: %q", errors.WithStack(err))
 			return errors.WithStack(err)
 		}
 	}

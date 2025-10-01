@@ -214,8 +214,8 @@ func keywordsFromSearch(search string) (keywords []string, emails []string) {
 	return
 }
 
-func KeywordsTSVector(key *openpgp.PrimaryKey) string {
-	keywords, _ := keywordsFromKey(key)
+func KeywordsTSVector(key *openpgp.PrimaryKey) (string, []UserIdDoc) {
+	keywords, uiddocs := keywordsFromKey(key)
 	tsv, err := keywordsToTSVector(keywords, " ")
 	if err != nil {
 		// In this case we've found a key that generated
@@ -226,9 +226,9 @@ func KeywordsTSVector(key *openpgp.PrimaryKey) string {
 		// reject it as a bad key, but for now we just skip
 		// storing keyword information.
 		log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err)
-		return ""
+		return "", nil
 	}
-	return tsv
+	return tsv, uiddocs
 }
 
 func KeywordsTSQuery(query string) (string, error) {
