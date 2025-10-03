@@ -7,3 +7,4 @@ for i in $($SCRIPT_DIR/inventory | sort -k2 | awk '/hkp/{print $1 "," $2}'); do
     echo "$id latest PKS logs:"
     docker-compose logs "hkp$id" | awk '/PKS target list/ { if(match($0, /(hkp.)(:[0-9]+)? (to|from)/, m)){ out[m[1]]=$0; }}; END { for(i in out) { print out[i]; }}'
 done
+echo
