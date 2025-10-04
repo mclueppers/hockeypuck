@@ -337,8 +337,6 @@ func (kd *KeyDoc) Refresh() (changed bool, err error) {
 		changed = true
 	}
 
-	// TODO: populate the userids table!
-
 	// In future we may add further tasks here.
 	// DO NOT update the md5 field, as this is used by bulkReindex to prevent simultaneous updates.
 
