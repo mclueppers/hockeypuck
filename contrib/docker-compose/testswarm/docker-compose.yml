@@ -36,8 +36,7 @@ services:
     - pg0_data:/var/lib/postgresql/data
 
   hkp1:
-    build:
-      context: ../../..
+    image: testswarm-hkp0
     ports:
     - "11410:11370"
     - "11411:11371"
@@ -71,8 +70,7 @@ services:
     - pg1_data:/var/lib/postgresql/data
 
   hkp2:
-    build:
-      context: ../../..
+    image: testswarm-hkp0
     ports:
     - "11420:11370"
     - "11421:11371"
@@ -106,8 +104,7 @@ services:
     - pg2_data:/var/lib/postgresql/data
 
   hkp3:
-    build:
-      context: ../../..
+    image: testswarm-hkp0
     ports:
     - "11430:11370"
     - "11431:11371"
