@@ -448,3 +448,39 @@ func (st *storage) fetchSubKeyDocs(rfps []string, bysubfp bool) ([]*types.SubKey
 
 	return result, nil
 }
+
+// fetchUserIdDocs returns a slice of UserIdDocs corresponding to the supplied slice of rfingerprints.
+// Note that it returns nil if there are any errors reading the returned SQL records.
+func (st *storage) fetchUserIdDocs(rfps []string) ([]*types.UserIdDoc, error) {
+	var rfpIn []string
+	var sqlStr string
+	for _, rfp := range rfps {
+		_, err := hex.DecodeString(rfp)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid rfingerprint %q", rfp)
+		}
+		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
+	}
+	sqlStr = fmt.Sprintf("SELECT rfingerprint, uidstring, email, confidence FROM userids WHERE rfingerprint IN (%s) ORDER BY confidence DESC, email, uidstring ASC", strings.Join(rfpIn, ","))
+	rows, err := st.Query(sqlStr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	var result []*types.UserIdDoc
+	defer rows.Close()
+	for rows.Next() {
+		var uidd types.UserIdDoc
+		err = rows.Scan(&uidd.RFingerprint, &uidd.UidString, &uidd.Email, &uidd.Confidence)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, errors.WithStack(err)
+		}
+		result = append(result, &uidd)
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return result, nil
+}

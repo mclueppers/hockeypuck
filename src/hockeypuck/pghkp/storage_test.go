@@ -173,9 +173,22 @@ func (s *S) TestTableSchemas(c *gc.C) {
 	subkeydocs, err := s.storage.fetchSubKeyDocs([]string{"a0ca24a2d715e7ac366b813179e2d575c7e5e636"}, true)
 	comment = gc.Commentf("fetch subkey a0ca24a2d715e7ac366b813179e2d575c7e5e636")
 	c.Assert(err, gc.IsNil, comment)
-	c.Assert(subkeydocs, gc.HasLen, 1)
-	c.Assert(subkeydocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
-	c.Assert(subkeydocs[0].VSubKeyFp, gc.Equals, "04636e5e7c575d2e971318b663ca7e517d2a42ac0a")
+	c.Assert(subkeydocs, gc.HasLen, 1, comment)
+	c.Assert(subkeydocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(subkeydocs[0].VSubKeyFp, gc.Equals, "04636e5e7c575d2e971318b663ca7e517d2a42ac0a", comment)
+
+	uiddocs, err := s.storage.fetchUserIdDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	comment = gc.Commentf("fetch userids 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(uiddocs, gc.HasLen, 2, comment)
+	c.Assert(uiddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(uiddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
+	c.Assert(uiddocs[0].Email, gc.Equals, "casey.marshall@canonical.com", comment)
+	c.Assert(uiddocs[0].Confidence, gc.Equals, 0, comment)
+	c.Assert(uiddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(uiddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
+	c.Assert(uiddocs[1].Email, gc.Equals, "cmars@cmarstech.com", comment)
+	c.Assert(uiddocs[1].Confidence, gc.Equals, 0, comment)
 }
 
 // Test round-trip of TSVector through PostgreSQL
