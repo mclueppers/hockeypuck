@@ -800,6 +800,14 @@ func (s *S) TestReloadIncremental(c *gc.C) {
 	s.checkReload(c, oldkeydocs)
 }
 
+func (s *S) TestOldestIdxTime(c *gc.C) {
+	s.addKey(c, "e68e311d.asc")
+	now := time.Now()
+	t := s.storage.oldestIdxTime() // returns time.Now() on error, which will be later than the time.Now() above, so the line below should fail
+	c.Assert(t.Before(now), gc.Equals, true)
+	c.Assert(t.Add(time.Minute).Before(now), gc.Equals, false)
+}
+
 func (s *S) TestPKS(c *gc.C) {
 	testAddr := "mailto:test@example.com"
 	now := time.Now()

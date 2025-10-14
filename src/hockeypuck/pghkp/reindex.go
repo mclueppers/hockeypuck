@@ -203,6 +203,8 @@ func (st *storage) Reindex() error {
 }
 
 // Start reindexing in the background. This should only be done after server startup, not during load or dump.
-func (st *storage) StartReindex() {
-	st.t.Go(st.Reindex)
+func (st *storage) StartReindex(reindexGraceSecs int) {
+	if st.oldestIdxTime().Add(time.Second * time.Duration(reindexGraceSecs)).Before(time.Now()) {
+		st.t.Go(st.Reindex)
+	}
 }
