@@ -92,7 +92,7 @@ type DBConfig struct {
 	Driver           string `toml:"driver"`
 	DSN              string `toml:"dsn"`
 	ReindexOnStartup bool   `toml:"reindexOnStartup"`
-	ReindexGraceSecs int    `toml:"reindexGraceSecs`
+	ReindexGraceSecs int    `toml:"reindexGraceSecs"`
 }
 
 const (
