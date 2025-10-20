@@ -13,7 +13,7 @@ You will need a beefy Linux machine to run this, and the following packages inst
 To set up a fresh environment, cd into this directory and run `make clean`.
 
 To start the environment for a particular scenario `[N]`, run `make scenario[N]`.
-You should wait *at least five minutes* for the environment to fully stabilise before running the tests.
+You should wait *at least 60s* for the environment to fully stabilise before running the tests.
 
 To perform the tests, run `make test`.
 
