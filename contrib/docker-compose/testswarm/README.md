@@ -60,6 +60,12 @@ The above configuration SHOULD NOT fully reconcile, although hkp1 and hkp2 SHOUL
 1 latest PKS logs:
 2 latest PKS logs:
 3 latest PKS logs:
+
+echo "select * from userids;" | ./tests/dbq pg0
+               rfingerprint               |                  uidstring                   |          email          | confidence 
+------------------------------------------+----------------------------------------------+-------------------------+------------
+ e83e74f4c055132f36e449e51e57a33af5bb58be | alice lovelace <alice@openpgp.example>       | alice@openpgp.example   |          0
+(1 row)
 ~~~
 
 # Scenario 2
@@ -99,6 +105,15 @@ hkp1_1  | time="2025-06-22T16:40:46Z" level=info msg="temporarily adding hkp://h
 2 latest PKS logs:
 3 latest PKS logs:
 hkp3_1  | time="2025-06-22T16:41:04Z" level=info msg="temporarily adding hkp://hkp0:11371 to PKS target list"
+
+echo "select * from userids;" | ./tests/dbq pg0
+               rfingerprint               |                  uidstring                   |          email          | confidence 
+------------------------------------------+----------------------------------------------+-------------------------+------------
+ e83e74f4c055132f36e449e51e57a33af5bb58be | alice lovelace <alice@openpgp.example>       | alice@openpgp.example   |          0
+ 0337e510a28ccfbfc887f0899c281b32a1e66a1d | bob babbage <bob@openpgp.example>            | bob@openpgp.example     |          0
+ a9486d67cd987ab91f8e3c0bdd5e904400adff17 | carol oldstyle <carol@openpgp.example>       | carol@openpgp.example   |          0
+ 591fe256ba352619da2d05e49cb6950aa8f0eda2 | ricarda s. álvarez <ricarda@openpgp.example> | ricarda@openpgp.example |          0
+(4 rows)
 ~~~
 
 # Scenario 3
@@ -132,6 +147,15 @@ hkp1_1  | time="2025-06-22T16:46:58Z" level=info msg="removing any copies of hkp
 2 latest PKS logs:
 3 latest PKS logs:
 hkp3_1  | time="2025-06-22T16:47:51Z" level=info msg="temporarily adding hkp://hkp0:11371 to PKS target list"
+
+echo "select * from userids;" | ./tests/dbq pg0
+               rfingerprint               |                  uidstring                   |          email          | confidence 
+------------------------------------------+----------------------------------------------+-------------------------+------------
+ e83e74f4c055132f36e449e51e57a33af5bb58be | alice lovelace <alice@openpgp.example>       | alice@openpgp.example   |          0
+ 0337e510a28ccfbfc887f0899c281b32a1e66a1d | bob babbage <bob@openpgp.example>            | bob@openpgp.example     |          0
+ a9486d67cd987ab91f8e3c0bdd5e904400adff17 | carol oldstyle <carol@openpgp.example>       | carol@openpgp.example   |          0
+ 591fe256ba352619da2d05e49cb6950aa8f0eda2 | ricarda s. álvarez <ricarda@openpgp.example> | ricarda@openpgp.example |          0
+(4 rows)
 ~~~
 
 # Sample keys

@@ -85,12 +85,14 @@ const (
 	DefaultMaxKeyLength       = 1048576
 	DefaultMaxPacketLength    = 8192
 	DefaultDBReindexOnStartup = true
+	DefaultDBReindexGraceSecs = 60 * 60 * 24 * 7
 )
 
 type DBConfig struct {
 	Driver           string `toml:"driver"`
 	DSN              string `toml:"dsn"`
 	ReindexOnStartup bool   `toml:"reindexOnStartup"`
+	ReindexGraceSecs int    `toml:"reindexGraceSecs"`
 }
 
 const (
@@ -158,6 +160,7 @@ func DefaultOpenPGP() OpenPGPConfig {
 			Driver:           DefaultDBDriver,
 			DSN:              DefaultDBDSN,
 			ReindexOnStartup: DefaultDBReindexOnStartup,
+			ReindexGraceSecs: DefaultDBReindexGraceSecs,
 		},
 		MaxKeyLength:    DefaultMaxKeyLength,
 		MaxPacketLength: DefaultMaxPacketLength,

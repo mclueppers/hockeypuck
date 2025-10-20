@@ -19,3 +19,4 @@ stop:
 test:
 	./tests/totals
 	./tests/pkslog
+	echo "select * from userids;" | ./tests/dbq pg0

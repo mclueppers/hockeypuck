@@ -152,9 +152,43 @@ func (s *S) TestMD5(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].KeyID(), gc.Equals, "cc5112bdce353cf4")
+	c.Assert(keys[0].KeyID, gc.Equals, "cc5112bdce353cf4")
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "Jenny Ondioline <jennyo@transient.net>")
+}
+
+func (s *S) TestTableSchemas(c *gc.C) {
+	s.addKey(c, "e68e311d.asc")
+
+	keydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	comment := gc.Commentf("fetch 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(keydocs, gc.HasLen, 1, comment)
+	c.Assert(keydocs[0].Keywords, gc.Equals, "'canonical.com' 'casey' 'casey marshall <casey.marshall@canonical.com>' 'casey marshall <cmars@cmarstech.com>' 'casey.marshall' 'casey.marshall@canonical.com' 'cmars' 'cmars@cmarstech.com' 'cmarstech.com' 'marshall'", comment)
+	c.Assert(keydocs[0].CTime, gc.Not(gc.Equals), time.Time{}, comment)
+	c.Assert(keydocs[0].MTime, gc.Equals, keydocs[0].CTime, comment)
+	c.Assert(keydocs[0].IdxTime, gc.Equals, keydocs[0].CTime, comment)
+	c.Assert(keydocs[0].VFingerprint, gc.Equals, "048d7c6b1a49166a46ff293af2d4236eabe68e311d", comment)
+
+	subkeydocs, err := s.storage.fetchSubKeyDocs([]string{"a0ca24a2d715e7ac366b813179e2d575c7e5e636"}, true)
+	comment = gc.Commentf("fetch subkey a0ca24a2d715e7ac366b813179e2d575c7e5e636")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(subkeydocs, gc.HasLen, 1, comment)
+	c.Assert(subkeydocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(subkeydocs[0].VSubKeyFp, gc.Equals, "04636e5e7c575d2e971318b663ca7e517d2a42ac0a", comment)
+
+	uiddocs, err := s.storage.fetchUserIdDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	comment = gc.Commentf("fetch userids 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(uiddocs, gc.HasLen, 2, comment)
+	c.Assert(uiddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(uiddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
+	c.Assert(uiddocs[0].Email, gc.Equals, "casey.marshall@canonical.com", comment)
+	c.Assert(uiddocs[0].Confidence, gc.Equals, 0, comment)
+	c.Assert(uiddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(uiddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
+	c.Assert(uiddocs[1].Email, gc.Equals, "cmars@cmarstech.com", comment)
+	c.Assert(uiddocs[1].Confidence, gc.Equals, 0, comment)
 }
 
 // Test round-trip of TSVector through PostgreSQL
@@ -228,7 +262,7 @@ func (s *S) TestResolve(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].KeyID(), gc.Equals, "f79362da44a2d1db")
+		c.Assert(keys[0].KeyID, gc.Equals, "f79362da44a2d1db")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 2)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "Casey Marshall <casey.marshall@gazzang.com>")
 	}
@@ -281,7 +315,7 @@ func (s *S) TestResolveWithHyphen(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].KeyID(), gc.Equals, "3287f5a32632c2c3")
+		c.Assert(keys[0].KeyID, gc.Equals, "3287f5a32632c2c3")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "steven-12345 (Test Encryption) <steven-test@example.com>")
 	}
@@ -339,7 +373,7 @@ func (s *S) TestResolveBareEmail(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].KeyID(), gc.Equals, "a4eb82d2573f7c77")
+		c.Assert(keys[0].KeyID, gc.Equals, "a4eb82d2573f7c77")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "support@posteo.de")
 	}
@@ -373,7 +407,7 @@ func (s *S) TestMerge(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].KeyID(), gc.Equals, "361bc1f023e0dcca")
+	c.Assert(keys[0].KeyID, gc.Equals, "361bc1f023e0dcca")
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	c.Assert(keys[0].UserIDs[0].Signatures, gc.HasLen, 2)
 }
@@ -394,7 +428,7 @@ func (s *S) TestPolicyURI(c *gc.C) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1)
-	c.Assert(keys[0].KeyID(), gc.Equals, "422c9066e21f705a")
+	c.Assert(keys[0].KeyID, gc.Equals, "422c9066e21f705a")
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1)
 	// this shouldn't actually care WHICH signature the policy URI is at in the same way.
 	c.Assert(keys[0].UserIDs[0].Signatures[2].IssuerKeyID(), gc.Equals, "2839fe0d796198b1")
@@ -420,7 +454,7 @@ func (s *S) TestEd25519(c *gc.C) {
 
 		keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 		c.Assert(keys, gc.HasLen, 1)
-		c.Assert(keys[0].KeyID(), gc.Equals, "d4236eabe68e311d")
+		c.Assert(keys[0].KeyID, gc.Equals, "d4236eabe68e311d")
 		c.Assert(keys[0].UserIDs, gc.HasLen, 2)
 		c.Assert(keys[0].UserIDs[0].Keywords, gc.Equals, "Casey Marshall <casey.marshall@canonical.com>")
 	}
@@ -590,15 +624,16 @@ func (s *S) TestAddBareRevocation(c *gc.C) {
 func (s *S) TestReindex(c *gc.C) {
 	s.addKey(c, "e68e311d.asc")
 
-	// Now reset the keywords column of the test key's DB record
-	_, err := s.storage.Exec(`UPDATE keys SET keywords = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
-	c.Assert(err, gc.IsNil)
+	// Now reset the reindexable columns of the test key's DB record
+	_, err := s.storage.Exec(`UPDATE keys SET keywords = '', vfingerprint = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's key"))
 
 	oldkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	comment := gc.Commentf("fetch 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
 	c.Assert(err, gc.IsNil, comment)
 	c.Assert(oldkeydocs, gc.HasLen, 1, comment)
 	c.Assert(oldkeydocs[0].Keywords, gc.Equals, "", comment)
+	c.Assert(oldkeydocs[0].VFingerprint, gc.Equals, "", comment)
 
 	// Check that Casey's key is no longer indexed by name
 	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey+marshall")
@@ -620,6 +655,7 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(newkeydocs[0].CTime, gc.Equals, oldkeydocs[0].CTime, comment)
 	c.Assert(newkeydocs[0].MTime, gc.Equals, oldkeydocs[0].MTime, comment)
 	c.Assert(newkeydocs[0].IdxTime, gc.Not(gc.Equals), oldkeydocs[0].IdxTime, comment)
+	c.Assert(newkeydocs[0].VFingerprint, gc.Equals, "048d7c6b1a49166a46ff293af2d4236eabe68e311d", comment)
 
 	// Check that Casey's key is indexed again
 	res, err = http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey+marshall")
@@ -664,7 +700,8 @@ func (s *S) setupReload(c *gc.C) (oldkeydocs []*types.KeyDoc) {
 
 	// Now mangle Casey's key and write back
 	newdoc := `{"nonsense": "nonsense", ` + oldkeydocs[0].Doc[1:]
-	_, err = s.storage.Exec(`UPDATE keys SET keywords = '', doc = $2 WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), newdoc)
+	_, err = s.storage.Exec(`UPDATE keys SET keywords = '', vfingerprint = '', doc = $2 WHERE rfingerprint = $1`,
+		openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), newdoc)
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's key"))
 	return oldkeydocs
 }
@@ -693,7 +730,7 @@ func (s *S) checkReload(c *gc.C, oldkeydocs []*types.KeyDoc) {
 
 	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(armor))
 	c.Assert(keys, gc.HasLen, 1, comment)
-	c.Assert(keys[0].KeyID(), gc.Equals, "361bc1f023e0dcca", comment)
+	c.Assert(keys[0].KeyID, gc.Equals, "361bc1f023e0dcca", comment)
 	c.Assert(keys[0].UserIDs, gc.HasLen, 1, comment)
 	c.Assert(keys[0].UserIDs[0].Signatures, gc.HasLen, 2, comment)
 
@@ -729,8 +766,8 @@ func (s *S) TestReloadBulk(c *gc.C) {
 	newKeys, oldKeys := validateRecords(newRecords)
 	n, d, ok := s.storage.bulkInsert(newKeys, &result, oldKeys)
 	comment = gc.Commentf("bulkInsert")
-	c.Assert(ok, gc.Equals, true, comment)
 	c.Assert(result.Errors, gc.HasLen, 0, comment)
+	c.Assert(ok, gc.Equals, true, comment)
 	c.Assert(n, gc.Equals, 2, comment)
 	c.Assert(d, gc.Equals, 1, comment) // the evaporating key should have been deleted
 
@@ -770,6 +807,14 @@ func (s *S) TestReloadIncremental(c *gc.C) {
 	c.Assert(finished, gc.Equals, true, comment)
 
 	s.checkReload(c, oldkeydocs)
+}
+
+func (s *S) TestOldestIdxTime(c *gc.C) {
+	s.addKey(c, "e68e311d.asc")
+	now := time.Now()
+	t := s.storage.oldestIdxTime() // returns time.Now() on error, which will be later than the time.Now() above, so the line below should fail
+	c.Assert(t.Before(now), gc.Equals, true)
+	c.Assert(t.Add(time.Minute).Before(now), gc.Equals, false)
 }
 
 func (s *S) TestPKS(c *gc.C) {

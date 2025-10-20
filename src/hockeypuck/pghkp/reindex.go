@@ -18,8 +18,6 @@
 package pghkp
 
 import (
-	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"iter"
 	"maps"
@@ -27,7 +25,6 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/pkg/errors"
 
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/pghkp/types"
@@ -38,39 +35,6 @@ import (
 //
 // Reindexer implementation
 //
-
-func (st *storage) fetchKeyDocs(rfps []string) ([]*types.KeyDoc, error) {
-	var rfpIn []string
-	for _, rfp := range rfps {
-		_, err := hex.DecodeString(rfp)
-		if err != nil {
-			return nil, errors.Wrapf(err, "invalid rfingerprint %q", rfp)
-		}
-		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
-	}
-	sqlStr := fmt.Sprintf("SELECT rfingerprint, doc, md5, ctime, mtime, idxtime, keywords FROM keys WHERE rfingerprint IN (%s)", strings.Join(rfpIn, ","))
-	rows, err := st.Query(sqlStr)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	var result []*types.KeyDoc
-	defer rows.Close()
-	for rows.Next() {
-		var kd types.KeyDoc
-		err = rows.Scan(&kd.RFingerprint, &kd.Doc, &kd.MD5, &kd.CTime, &kd.MTime, &kd.IdxTime, &kd.Keywords)
-		if err != nil && err != sql.ErrNoRows {
-			return nil, errors.WithStack(err)
-		}
-		result = append(result, &kd)
-	}
-	err = rows.Err()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return result, nil
-}
 
 func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
 	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
@@ -92,15 +56,15 @@ func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hk
 				break
 			}
 			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR)",
-					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7))
+				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
+					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
 			insTime := time.Now().UTC()
 			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
-				insTime, insTime, insTime, kd.MD5, kd.Keywords)
+				insTime, insTime, insTime, kd.MD5, kd.Keywords, kd.VFingerprint)
 			kd, pullOk = keyDocsPull()
 		}
 		log.Debugf("attempting bulk copy of %d keys", idx-lastIdx)
-		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords) VALUES %s",
+		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint) VALUES %s",
 			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
 
 		err := st.bulkInsertSendBunchTx(keystmt, "reindexes", keysValueArgs)
@@ -239,6 +203,8 @@ func (st *storage) Reindex() error {
 }
 
 // Start reindexing in the background. This should only be done after server startup, not during load or dump.
-func (st *storage) StartReindex() {
-	st.t.Go(st.Reindex)
+func (st *storage) StartReindex(reindexGraceSecs int) {
+	if st.oldestIdxTime().Add(time.Second * time.Duration(reindexGraceSecs)).Before(time.Now()) {
+		st.t.Go(st.Reindex)
+	}
 }

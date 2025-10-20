@@ -58,6 +58,10 @@ func (st *storage) deleteTx(tx *sql.Tx, fp string) (string, error) {
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
+	_, err = tx.Exec("DELETE FROM userids WHERE rfingerprint = $1", rfp)
+	if err != nil {
+		return "", errors.WithStack(err)
+	}
 	var md5 string
 	err = tx.QueryRow("DELETE FROM keys WHERE rfingerprint = $1 RETURNING md5", rfp).Scan(&md5)
 	if err != nil {

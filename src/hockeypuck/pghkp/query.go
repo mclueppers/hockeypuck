@@ -321,7 +321,7 @@ func (st *storage) FetchRecords(rfps []string, options ...string) ([]*hkpstorage
 			err = st.preen(record)
 			if err == hkpstorage.ErrDigestMismatch {
 				log.Debugf("Writing back fp=%s", record.Fingerprint)
-				err := st.Update(record.PrimaryKey, record.PrimaryKey.KeyID(), record.MD5)
+				err := st.Update(record.PrimaryKey, record.PrimaryKey.KeyID, record.MD5)
 				if err != nil {
 					log.Errorf("could not writeback fp=%s: %v", record.Fingerprint, err)
 				}
@@ -371,4 +371,135 @@ func (st *storage) preen(record *hkpstorage.Record) error {
 		return hkpstorage.ErrDigestMismatch
 	}
 	return nil
+}
+
+// fetchKeyDocs returns a slice of KeyDocs corresponding to the supplied slice of rfingerprints.
+// Note that it returns nil if there are any errors reading the returned SQL records.
+func (st *storage) fetchKeyDocs(rfps []string) ([]*types.KeyDoc, error) {
+	var rfpIn []string
+	for _, rfp := range rfps {
+		_, err := hex.DecodeString(rfp)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid rfingerprint %q", rfp)
+		}
+		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
+	}
+	sqlStr := fmt.Sprintf("SELECT rfingerprint, doc, md5, ctime, mtime, idxtime, keywords, vfingerprint FROM keys WHERE rfingerprint IN (%s)", strings.Join(rfpIn, ","))
+	rows, err := st.Query(sqlStr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	var result []*types.KeyDoc
+	defer rows.Close()
+	for rows.Next() {
+		var kd types.KeyDoc
+		err = rows.Scan(&kd.RFingerprint, &kd.Doc, &kd.MD5, &kd.CTime, &kd.MTime, &kd.IdxTime, &kd.Keywords, &kd.VFingerprint)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, errors.WithStack(err)
+		}
+		result = append(result, &kd)
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return result, nil
+}
+
+// fetchSubKeyDocs returns a slice of SubKeyDocs corresponding to the supplied slice of rfingerprints.
+// If the second argument is true, it searches by subkey rfingerprint, otherwise by primary key rfingerprint.
+// Note that it returns nil if there are any errors reading the returned SQL records.
+func (st *storage) fetchSubKeyDocs(rfps []string, bysubfp bool) ([]*types.SubKeyDoc, error) {
+	var rfpIn []string
+	var sqlStr string
+	for _, rfp := range rfps {
+		_, err := hex.DecodeString(rfp)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid rfingerprint %q", rfp)
+		}
+		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
+	}
+	if bysubfp {
+		sqlStr = fmt.Sprintf("SELECT rfingerprint, rsubfp, vsubfp FROM subkeys WHERE rsubfp IN (%s)", strings.Join(rfpIn, ","))
+	} else {
+		sqlStr = fmt.Sprintf("SELECT rfingerprint, rsubfp, vsubfp FROM subkeys WHERE rfingerprint IN (%s)", strings.Join(rfpIn, ","))
+	}
+	rows, err := st.Query(sqlStr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	var result []*types.SubKeyDoc
+	defer rows.Close()
+	for rows.Next() {
+		var skd types.SubKeyDoc
+		err = rows.Scan(&skd.RFingerprint, &skd.RSubKeyFp, &skd.VSubKeyFp)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, errors.WithStack(err)
+		}
+		result = append(result, &skd)
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return result, nil
+}
+
+// fetchUserIdDocs returns a slice of UserIdDocs corresponding to the supplied slice of rfingerprints.
+// Note that it returns nil if there are any errors reading the returned SQL records.
+func (st *storage) fetchUserIdDocs(rfps []string) ([]*types.UserIdDoc, error) {
+	var rfpIn []string
+	var sqlStr string
+	for _, rfp := range rfps {
+		_, err := hex.DecodeString(rfp)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid rfingerprint %q", rfp)
+		}
+		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
+	}
+	sqlStr = fmt.Sprintf("SELECT rfingerprint, uidstring, email, confidence FROM userids WHERE rfingerprint IN (%s) ORDER BY confidence DESC, email, uidstring ASC", strings.Join(rfpIn, ","))
+	rows, err := st.Query(sqlStr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	var result []*types.UserIdDoc
+	defer rows.Close()
+	for rows.Next() {
+		var uidd types.UserIdDoc
+		err = rows.Scan(&uidd.RFingerprint, &uidd.UidString, &uidd.Email, &uidd.Confidence)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, errors.WithStack(err)
+		}
+		result = append(result, &uidd)
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return result, nil
+}
+
+// oldestIdxTime returns the Time of the oldest value in the idxtime column.
+// On error it returns the current time; this prevents excessive calls to StartReindex.
+func (st *storage) oldestIdxTime() (t time.Time) {
+	sqlStr := "SELECT idxtime FROM keys ORDER BY idxtime ASC LIMIT 1"
+	rows, err := st.Query(sqlStr)
+	if err != nil {
+		return time.Now()
+	}
+
+	defer rows.Close()
+	for rows.Next() {
+		err = rows.Scan(&t)
+		if err != nil && err != sql.ErrNoRows {
+			return time.Now()
+		}
+	}
+	return t
 }

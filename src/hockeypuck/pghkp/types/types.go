@@ -36,15 +36,31 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// keyDoc is a nearly-raw copy of a row in the PostgreSQL `keys` table.
+// KeyDoc is a nearly-raw copy of a row in the PostgreSQL `keys` table.
 type KeyDoc struct {
 	RFingerprint string
+	VFingerprint string
 	CTime        time.Time
 	MTime        time.Time
 	IdxTime      time.Time
 	MD5          string
 	Doc          string
 	Keywords     string
+}
+
+// SubKeyDoc is a raw copy of a row in the PostgreSQL `subkeys` table.
+type SubKeyDoc struct {
+	RFingerprint string
+	RSubKeyFp    string
+	VSubKeyFp    string
+}
+
+// UserIdDoc is a raw copy of a row in the PostgreSQL `userids` table.
+type UserIdDoc struct {
+	RFingerprint string
+	UidString    string
+	Email        string
+	Confidence   int
 }
 
 func ReadOneKey(b []byte, rfingerprint string) (*openpgp.PrimaryKey, error) {
@@ -110,15 +126,15 @@ func keywordsFromTSVector(tsv string) (result []string) {
 //
 // TODO: shouldn't this be a method on openpgp.PrimaryKey instead?
 // It's not specific to PostgreSQL, or even to storage.
-func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []string, uids []string) {
+func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []UserIdDoc) {
 	keywordMap := make(map[string]bool)
-	emailMap := make(map[string]bool)
-	uidMap := make(map[string]bool)
-	for _, uid := range key.UserIDs {
+	uiddocs = make([]UserIdDoc, len(key.UserIDs))
+	for i, uid := range key.UserIDs {
 		s := strings.ToLower(uid.Keywords)
 		// always include full text of UserID (lowercased)
 		keywordMap[s] = true
-		uidMap[s] = true
+		uiddocs[i].RFingerprint = key.RFingerprint
+		uiddocs[i].UidString = s
 		email := ""
 		commentary := s
 		lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
@@ -132,9 +148,9 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []strin
 		// TODO: this still doesn't recognise all possible forms of UID :confounded:
 		if email != "" {
 			keywordMap[email] = true
-			emailMap[email] = true
 			parts := strings.SplitN(email, "@", 2)
 			if len(parts) == 2 {
+				uiddocs[i].Email = email
 				keywordMap[parts[0]] = true
 				keywordMap[parts[1]] = true
 			}
@@ -157,18 +173,6 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []strin
 			continue
 		}
 		keywords = append(keywords, k)
-	}
-	for k := range emailMap {
-		if k == "" {
-			continue
-		}
-		emails = append(emails, k)
-	}
-	for k := range uidMap {
-		if k == "" {
-			continue
-		}
-		uids = append(uids, k)
 	}
 	return
 }
@@ -210,8 +214,8 @@ func keywordsFromSearch(search string) (keywords []string, emails []string) {
 	return
 }
 
-func KeywordsTSVector(key *openpgp.PrimaryKey) string {
-	keywords, _, _ := keywordsFromKey(key)
+func KeywordsTSVector(key *openpgp.PrimaryKey) (string, []UserIdDoc) {
+	keywords, uiddocs := keywordsFromKey(key)
 	tsv, err := keywordsToTSVector(keywords, " ")
 	if err != nil {
 		// In this case we've found a key that generated
@@ -222,9 +226,9 @@ func KeywordsTSVector(key *openpgp.PrimaryKey) string {
 		// reject it as a bad key, but for now we just skip
 		// storing keyword information.
 		log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err)
-		return ""
+		return "", nil
 	}
-	return tsv
+	return tsv, uiddocs
 }
 
 func KeywordsTSQuery(query string) (string, error) {
@@ -317,13 +321,19 @@ func (kd *KeyDoc) Refresh() (changed bool, err error) {
 	}
 
 	// Regenerate keywords
-	newKeywords, _, _ := keywordsFromKey(key)
+	newKeywords, _ := keywordsFromKey(key)
 	oldKeywords := keywordsFromTSVector(kd.Keywords)
 	slices.Sort(newKeywords)
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
 		log.Debugf("keyword mismatch on fp=%s, was %q now %q", pk.Fingerprint, oldKeywords, newKeywords)
 		kd.Keywords, err = keywordsToTSVector(newKeywords, " ")
+		changed = true
+	}
+
+	// Update to post-2.3 keyDoc schema
+	if kd.VFingerprint == "" {
+		kd.VFingerprint = key.VFingerprint
 		changed = true
 	}
 
