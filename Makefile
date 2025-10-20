@@ -15,6 +15,7 @@ commands = \
 	hockeypuck-dump \
 	hockeypuck-load \
 	hockeypuck-pbuild \
+	hockeypuck-reload \
 	ratelimit-tester
 
 all: test build
