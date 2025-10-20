@@ -7,7 +7,7 @@ backend be_hockeypuck_primary
     mode http
 
     option httpchk
-    http-check send meth GET uri /pks/lookup?op=stats hdr Host "${FQDN}"
+    http-check send meth GET uri /pks/health hdr Host "${FQDN}"
     http-check expect status 200
     http-check send-state
 
@@ -17,7 +17,7 @@ backend be_hockeypuck
     mode http
 
     option httpchk
-    http-check send meth GET uri /pks/lookup?op=stats hdr Host "${FQDN}"
+    http-check send meth GET uri /pks/health hdr Host "${FQDN}"
     http-check expect status 200
     http-check send-state
 
