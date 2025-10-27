@@ -8,7 +8,7 @@ Hockeypuck uses semantic versioning and should always be installed from the late
 If you wish to configure SKS peering, you should ensure that all peers are using the same minor version.
 Hockeypuck is not guaranteed to sync successfully between different minor versions.
 
-The current release branch is 2.2
+The current release branch is 2.3
 
 # Quick start with docker-compose (for testing)
 
