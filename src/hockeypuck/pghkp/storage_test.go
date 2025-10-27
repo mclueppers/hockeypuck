@@ -627,6 +627,10 @@ func (s *S) TestReindex(c *gc.C) {
 	// Now reset the reindexable columns of the test key's DB record
 	_, err := s.storage.Exec(`UPDATE keys SET keywords = '', vfingerprint = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's key"))
+	_, err = s.storage.Exec(`UPDATE subkeys SET vsubfp = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's subkey"))
+	_, err = s.storage.Exec(`DELETE FROM userids WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userids"))
 
 	oldkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	comment := gc.Commentf("fetch 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
@@ -656,6 +660,26 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(newkeydocs[0].MTime, gc.Equals, oldkeydocs[0].MTime, comment)
 	c.Assert(newkeydocs[0].IdxTime, gc.Not(gc.Equals), oldkeydocs[0].IdxTime, comment)
 	c.Assert(newkeydocs[0].VFingerprint, gc.Equals, "048d7c6b1a49166a46ff293af2d4236eabe68e311d", comment)
+
+	newsubkeydocs, err := s.storage.fetchSubKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")}, false)
+	comment = gc.Commentf("fetch subkeys 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(newsubkeydocs, gc.HasLen, 2, comment)
+	c.Assert(newsubkeydocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newsubkeydocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newsubkeydocs[0].VSubKeyFp, gc.Equals, "04636e5e7c575d2e971318b663ca7e517d2a42ac0a", comment)
+	c.Assert(newsubkeydocs[1].VSubKeyFp, gc.Equals, "046f6d93d0811d1f8b7a34944b782e33de1a96e4c8", comment)
+
+	newuseriddocs, err := s.storage.fetchUserIdDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	comment = gc.Commentf("fetch userids 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(newuseriddocs, gc.HasLen, 2, comment)
+	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newuseriddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newuseriddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
+	c.Assert(newuseriddocs[0].Email, gc.Equals, "casey.marshall@canonical.com", comment)
+	c.Assert(newuseriddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
+	c.Assert(newuseriddocs[1].Email, gc.Equals, "cmars@cmarstech.com", comment)
 
 	// Check that Casey's key is indexed again
 	res, err = http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey+marshall")

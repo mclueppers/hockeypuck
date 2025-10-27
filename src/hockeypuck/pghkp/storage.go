@@ -91,13 +91,6 @@ FOREIGN KEY (rfingerprint) REFERENCES keys(rfingerprint)
 TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE subkeys ALTER vsubfp
 DROP DEFAULT`,
-	// Note that since v3 keys do not have subkeys, and we have not implemented v5/6 yet,
-	// we know that all subkeys are v4 and can efficiently backfill the vsubfp column on startup.
-	`UPDATE subkeys
-SET vsubfp = '04' || reverse(rsubfp) WHERE vsubfp = ''
-`,
-	`ALTER TABLE subkeys
-ADD UNIQUE (vsubfp)`,
 	// userids is always created with its initial four columns.
 	// Additional columns should be defined using ALTER TABLE to enable seamless migration.
 	`CREATE TABLE IF NOT EXISTS userids
