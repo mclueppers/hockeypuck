@@ -1,4 +1,4 @@
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.24-trixie AS builder
 LABEL io.hockeypuck.temp=true
 RUN adduser builder --system --disabled-login
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,7 +13,7 @@ COPY --chown=builder:root .git /hockeypuck/.git
 RUN make build
 
 
-FROM debian:13.1-slim
+FROM debian:trixie-slim
 RUN mkdir -p /hockeypuck/bin /hockeypuck/lib /hockeypuck/etc /hockeypuck/data
 COPY --from=builder /hockeypuck/bin /hockeypuck/bin
 COPY contrib/templates /hockeypuck/lib/templates
