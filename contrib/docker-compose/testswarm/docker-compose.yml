@@ -26,7 +26,7 @@ services:
         max-file: "5"
 
   pg0:
-    image: postgres
+    image: postgres:17
     restart: always
     environment:
     - POSTGRES_USER
@@ -60,7 +60,7 @@ services:
         max-file: "5"
 
   pg1:
-    image: postgres
+    image: postgres:16
     restart: always
     environment:
     - POSTGRES_USER
@@ -94,7 +94,7 @@ services:
         max-file: "5"
 
   pg2:
-    image: postgres
+    image: postgres:15
     restart: always
     environment:
     - POSTGRES_USER
@@ -128,7 +128,7 @@ services:
         max-file: "5"
 
   pg3:
-    image: postgres
+    image: postgres:14
     restart: always
     environment:
     - POSTGRES_USER
