@@ -2,7 +2,7 @@ FROM golang:1.24-trixie AS builder
 LABEL io.hockeypuck.temp=true
 RUN adduser builder --system --disabled-login
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update -qq && apt-get -y install build-essential postgresql-15 postgresql-server-dev-15 --no-install-recommends
+RUN apt-get update -qq && apt-get -y install build-essential postgresql-17 postgresql-server-dev-17 --no-install-recommends
 COPY --chown=builder:root Makefile /hockeypuck/
 COPY --chown=builder:root src /hockeypuck/src
 ENV GOPATH=/hockeypuck
