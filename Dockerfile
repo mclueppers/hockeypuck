@@ -13,7 +13,7 @@ COPY --chown=builder:root .git /hockeypuck/.git
 RUN make build
 
 
-FROM debian:bookworm-slim
+FROM debian:13.1-slim
 RUN mkdir -p /hockeypuck/bin /hockeypuck/lib /hockeypuck/etc /hockeypuck/data
 COPY --from=builder /hockeypuck/bin /hockeypuck/bin
 COPY contrib/templates /hockeypuck/lib/templates
