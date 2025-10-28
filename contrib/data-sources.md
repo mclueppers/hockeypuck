@@ -8,7 +8,9 @@ Contact hockeypuck-devel@groups.google.com for assistance.
 
 ## Cyberbits
 
-Dumps are provided by two methods (should be identical content):
+Dumps are provided by [cyberbits.asia](https://cyberbits.asia/) and [cyberbits.eu](https://cyberbits.eu/) via rsync:
 
-* [https://mirror.cyberbits.eu/hockeypuck/dump](https://mirror.cyberbits.eu/hockeypuck/dump/)
-* rsync://rsync.cyberbits.eu/hockeypuck/dump
+- rsync://rsync.cyberbits.asia/hockeypuck/dump (Asia mirror)
+- rsync://rsync.cyberbits.eu/hockeypuck/dump (Europe mirror)
+
+Please email hockeypuck@cyberbits.dev to get the rsync password.
