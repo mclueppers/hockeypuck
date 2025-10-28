@@ -156,7 +156,7 @@ rfingerprint IS NULL OR uidstring IS NULL OR confidence IS NULL OR
 EXISTS (SELECT 1 FROM userids_checked WHERE userids_checked.rfingerprint = userids_copyin.rfingerprint AND userids_checked.uidstring = userids_copyin.uidstring)
 `
 
-// bulkTxFilterDupSubkeys is the final userid-filtering query, between temporary tables, used for
+// bulkTxFilterDupUserIDs is the final userid-filtering query, between temporary tables, used for
 // bulk insertion. Among all the userids of keys in a call to Insert(..) (usually the keys in a processed
 // key-dump file), this query sets aside for final DB insertion _a single copy_ of those userids that are
 // duplicates in the arguments of Insert(..), but do not yet exist in the DB.
@@ -589,8 +589,8 @@ func (st *storage) bulkInsertCheckedKeysSubkeys(result *hkpstorage.InsertError) 
 
 	// Batch INSERT all checked-for-constraints keys from memory tables (should need no checks!!!!)
 	// Final batch-insertion in keys/subkeys tables without any checks: _must not_ give any errors
-	txStrs := []string{bulkTxInsertKeys, bulkTxInsertSubkeys}
-	msgStrs := []string{"bulkTx-insert-keys", "bulkTx-insert-subkeys"}
+	txStrs := []string{bulkTxInsertKeys, bulkTxInsertSubkeys, bulkTxInsertUserIDs}
+	msgStrs := []string{"bulkTx-insert-keys", "bulkTx-insert-subkeys", "bulkTx-insert-userids"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -612,8 +612,10 @@ func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSu
 
 	// Batch UPDATE all keys from memory tables (should need no checks!!!!)
 	// Final batch-update in keys/subkeys tables without any checks: _must not_ give any errors
-	txStrs := []string{bulkTxJournalKeys, bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs, bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys, bulkTxInsertUserIDs}
-	msgStrs := []string{"bulkTx-journal-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys"}
+	txStrs := []string{bulkTxJournalKeys, bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs,
+		bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys, bulkTxInsertUserIDs}
+	msgStrs := []string{"bulkTx-journal-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
+		"bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys", "bulkTx-insert-userids"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)

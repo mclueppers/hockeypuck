@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	stdtesting "testing"
 	"time"
 
@@ -621,6 +622,47 @@ func (s *S) TestAddBareRevocation(c *gc.C) {
 	c.Assert(addRes.Updated, gc.HasLen, 1)
 }
 
+func (s *S) TestBulkInsert(c *gc.C) {
+	f := testing.MustInput("examples.pgp")
+	kr := openpgp.NewKeyReader(f, []openpgp.KeyReaderOption{}...)
+	keys, err := kr.Read()
+	c.Assert(err, gc.IsNil)
+	var result hkpstorage.InsertError
+	n, _, ok := s.storage.bulkInsert(keys, &result, []string{})
+	c.Assert(ok, gc.Equals, true)
+	c.Assert(n, gc.Equals, 2592)
+
+	newkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8")})
+	comment := gc.Commentf("fetch 00BC6161D88D85E9EF87C55826707FFC4FB750D8")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(newkeydocs, gc.HasLen, 1, comment)
+	c.Assert(newkeydocs[0].Keywords, gc.Equals, "'example-10101010' 'example-10101010@example.com' 'example.com' 'testing' 'testing <example-10101010@example.com>'", comment)
+	c.Assert(newkeydocs[0].VFingerprint, gc.Equals, strings.ToLower("0400BC6161D88D85E9EF87C55826707FFC4FB750D8"), comment)
+
+	newsubkeydocs, err := s.storage.fetchSubKeyDocs([]string{openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8")}, false)
+	comment = gc.Commentf("fetch subkeys 00BC6161D88D85E9EF87C55826707FFC4FB750D8")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(newsubkeydocs, gc.HasLen, 1, comment)
+	c.Assert(newsubkeydocs[0].RFingerprint, gc.Equals, openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8"), comment)
+	c.Assert(newsubkeydocs[0].VSubKeyFp, gc.Equals, "043cf221f8cecc8ef558f52146b7d1a07afdf07c46", comment)
+
+	newuseriddocs, err := s.storage.fetchUserIdDocs([]string{openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8")})
+	comment = gc.Commentf("fetch userids 00BC6161D88D85E9EF87C55826707FFC4FB750D8")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(newuseriddocs, gc.HasLen, 1, comment)
+	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8"), comment)
+	c.Assert(newuseriddocs[0].UidString, gc.Equals, "testing <example-10101010@example.com>", comment)
+	c.Assert(newuseriddocs[0].Email, gc.Equals, "example-10101010@example.com", comment)
+
+	// Check that the key is indexed
+	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=example-10101010@example.com")
+	comment = gc.Commentf("search=example-10101010@example.com")
+	c.Assert(err, gc.IsNil, comment)
+	res.Body.Close()
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(res.StatusCode, gc.Equals, http.StatusOK, comment)
+}
+
 func (s *S) TestReindex(c *gc.C) {
 	s.addKey(c, "e68e311d.asc")
 
@@ -727,6 +769,11 @@ func (s *S) setupReload(c *gc.C) (oldkeydocs []*types.KeyDoc) {
 	_, err = s.storage.Exec(`UPDATE keys SET keywords = '', vfingerprint = '', doc = $2 WHERE rfingerprint = $1`,
 		openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), newdoc)
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's key"))
+	_, err = s.storage.Exec(`UPDATE subkeys SET vsubfp = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's subkey"))
+	_, err = s.storage.Exec(`DELETE FROM userids WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userids"))
+
 	return oldkeydocs
 }
 
@@ -742,6 +789,26 @@ func (s *S) checkReload(c *gc.C, oldkeydocs []*types.KeyDoc) {
 	c.Assert(newkeydocs[0].MTime, gc.Not(gc.Equals), oldkeydocs[0].MTime, comment)
 	c.Assert(newkeydocs[0].IdxTime, gc.Not(gc.Equals), oldkeydocs[0].IdxTime, comment)
 	c.Assert(len(newkeydocs[0].Doc), gc.Equals, len(oldkeydocs[0].Doc), comment)
+
+	newsubkeydocs, err := s.storage.fetchSubKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")}, false)
+	comment = gc.Commentf("fetch subkeys 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(newsubkeydocs, gc.HasLen, 2, comment)
+	c.Assert(newsubkeydocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newsubkeydocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newsubkeydocs[0].VSubKeyFp, gc.Equals, "04636e5e7c575d2e971318b663ca7e517d2a42ac0a", comment)
+	c.Assert(newsubkeydocs[1].VSubKeyFp, gc.Equals, "046f6d93d0811d1f8b7a34944b782e33de1a96e4c8", comment)
+
+	newuseriddocs, err := s.storage.fetchUserIdDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
+	comment = gc.Commentf("fetch userids 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
+	c.Assert(err, gc.IsNil, comment)
+	c.Assert(newuseriddocs, gc.HasLen, 2, comment)
+	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newuseriddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
+	c.Assert(newuseriddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
+	c.Assert(newuseriddocs[0].Email, gc.Equals, "casey.marshall@canonical.com", comment)
+	c.Assert(newuseriddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
+	c.Assert(newuseriddocs[1].Email, gc.Equals, "cmars@cmarstech.com", comment)
 
 	// Check that Alice's key is still searchable by her encryption subkey fingerprint
 	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x6A5B700BF3D13863")
