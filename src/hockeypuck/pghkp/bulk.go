@@ -247,8 +247,14 @@ WHERE keys.md5 = keys_copyin.md5
 
 // bulkTxReindexSubkeys is the query for updating the subkeys table schema to populate the vsubfp column in existing rows.
 const bulkTxReindexSubkeys string = `UPDATE subkeys
-SET vsubfp = '04' || reverse(rsubfp)
-WHERE vsubfp = '' AND rfingerprint IN ( SELECT rfingerprint from keys_copyin )
+SET vsubfp = subkeys_copyin.vsubfp FROM subkeys_copyin
+WHERE subkeys.rsubfp = subkeys_copyin.rsubfp
+`
+
+// bulkTxReindexUserIDs is the query for updating the userids table schema to (re)populate the email and confidence columns in existing rows.
+const bulkTxReindexUserIDs string = `UPDATE userids
+SET email = userids_copyin.email, confidence = userids_copyin.confidence FROM userids_copyin
+WHERE userids.rfingerprint = userids_copyin.rfingerprint AND userids.uidstring = userids_copyin.uidstring
 `
 
 // Stats collection queries
@@ -609,26 +615,30 @@ func (st *storage) bulkInsertCheckedKeysSubkeys(result *hkpstorage.InsertError) 
 // bulkUpdateKeysSubkeys updates a bunch of keys in-place.
 // It is similar to bulkInsertCheckedKeysSubkeys but performs no checks on keys (we assume the DB is already sane)
 // We still have to check for duplicate subkeys, as these are not stripped from the json docs.
-func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSubkeys int, ok bool) {
-	subkeysOK := true
+func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSubkeys, nullUserIDs int, ok bool) {
+	subkeysOK, useridsOK := true, true
 	// subkey batch-processing
 	if nullSubkeys, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
-		return 0, false
+		return 0, 0, false
+	}
+	// userid batch-processing
+	if nullUserIDs, useridsOK = st.bulkInsertCheckUserIDs(result); !useridsOK {
+		return 0, 0, false
 	}
 
 	// Batch UPDATE all keys from memory tables (should need no checks!!!!)
 	// Final batch-update in keys/subkeys tables without any checks: _must not_ give any errors
 	txStrs := []string{bulkTxJournalKeys, bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs,
-		bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs}
+		bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
 	msgStrs := []string{"bulkTx-journal-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
-		"bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids"}
+		"bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulkTx-reindex-userids"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update keys: %v", err)
-		return 0, false
+		return 0, 0, false
 	}
-	return nullSubkeys, true
+	return nullSubkeys, nullUserIDs, true
 }
 
 func (st *storage) bulkInsertSendBunchTx(keystmt, msgSpec string, keysValueArgs []interface{}) (err error) {
@@ -660,6 +670,7 @@ func (st *storage) bulkInsertSendBunchTx(keystmt, msgSpec string, keysValueArgs 
 	return nil
 }
 
+// TODO: these are effectively duplicates of KeyDoc, SubKeyDoc, UserIdDoc - can we merge them?
 type keyInsertArgs struct {
 	RFingerprint *string
 	jsonStrDoc   *string
@@ -679,7 +690,7 @@ type uidInsertArgs struct {
 	Confidence   *int
 }
 
-// Insert keys & subkeys to in-mem tables with no constraints at all: should have no errors!
+// Insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
 func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]subkeyInsertArgs, uidInsArgs [][]uidInsertArgs, result *hkpstorage.InsertError) (ok bool) {
 	lenKIA := len(keyInsArgs)
 	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
@@ -687,9 +698,9 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 		keysValueStrings := make([]string, 0, keysInBunch)
 		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
 		subkeysValueStrings := make([]string, 0, subkeysInBunch)
-		uidsValueStrings := make([]string, 0, uidsInBunch)
 		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
-		uidsValueArgs := make([]interface{}, 0, uidsInBunch*useridsNumColumns)       // *** must be less than 64k arguments ***
+		uidsValueStrings := make([]string, 0, uidsInBunch)
+		uidsValueArgs := make([]interface{}, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
 		for i, j, k := 0, 0, 0; idx < lenKIA; idx, i = idx+1, i+1 {
 			lenSKIA := len(skeyInsArgs[idx])
 			lenUIA := len(uidInsArgs[idx])
@@ -719,39 +730,47 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 					*uidInsArgs[idx][uidx].RFingerprint, *uidInsArgs[idx][uidx].UidString, *uidInsArgs[idx][uidx].Email, *uidInsArgs[idx][uidx].Confidence)
 			}
 		}
-		log.Debugf("attempting bulk insertion of %d keys and a total of %d subkeys!", idx-lastIdx, totSubkeyArgs/subkeysNumColumns)
 
-		// Send all keys to in-mem tables to the pg server; *no constraints checked*
-		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint) VALUES %s",
-			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
-		err := st.bulkInsertSendBunchTx(keystmt, "keys", keysValueArgs)
-		if err != nil {
-			result.Errors = append(result.Errors, err)
-			log.Warnf("could not send key bunch: %v", err)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+		ok := st.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
+		if !ok {
 			return false
 		}
-
-		// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
-		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp, vsubfp) VALUES %s",
-			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
-		err = st.bulkInsertSendBunchTx(subkeystmt, "subkeys", subkeysValueArgs)
-		if err != nil {
-			result.Errors = append(result.Errors, err)
-			log.Warnf("could not send subkey bunch: %v", err)
-			return false
-		}
-
-		// Send all userids to in-mem tables to the pg server; *no constraints checked*
-		useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, email, confidence) VALUES %s",
-			userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
-		err = st.bulkInsertSendBunchTx(useridstmt, "userids", uidsValueArgs)
-		if err != nil {
-			result.Errors = append(result.Errors, err)
-			log.Warnf("could not send userid bunch: %v", err)
-			return false
-		}
-
 		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+	}
+	return true
+}
+
+// bulkInsertSend copies the constructed database rows to the postgres in-memory tables
+func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings []string, keysValueArgs, subkeysValueArgs, uidsValueArgs []interface{}, result *hkpstorage.InsertError) (ok bool) {
+	// Send all keys to in-mem tables to the pg server; *no constraints checked*
+	keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint) VALUES %s",
+		keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
+	err := st.bulkInsertSendBunchTx(keystmt, "keys", keysValueArgs)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		log.Warnf("could not send key bunch: %v", err)
+		return false
+	}
+
+	// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
+	subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp, vsubfp) VALUES %s",
+		subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
+	err = st.bulkInsertSendBunchTx(subkeystmt, "subkeys", subkeysValueArgs)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		log.Warnf("could not send subkey bunch: %v", err)
+		return false
+	}
+
+	// Send all userids to in-mem tables to the pg server; *no constraints checked*
+	useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, email, confidence) VALUES %s",
+		userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
+	err = st.bulkInsertSendBunchTx(useridstmt, "userids", uidsValueArgs)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		log.Warnf("could not send userid bunch: %v", err)
+		return false
 	}
 	return true
 }
@@ -863,7 +882,7 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 		}
 		// (b): From _copyin tables update existing on-disk records
 		//      check subkey constraints only
-		if subkeysWithNulls, ok = st.bulkUpdateKeysSubkeys(result); !ok {
+		if subkeysWithNulls, useridsWithNulls, ok = st.bulkUpdateKeysSubkeys(result); !ok {
 			return 0, 0, false
 		}
 		keysInserted, subkeysInserted, useridsInserted, keysDeleted = st.bulkUpdateGetStats(result)

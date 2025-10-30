@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"iter"
 	"maps"
-	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -36,23 +35,37 @@ import (
 // Reindexer implementation
 //
 
+// bulkReindexDoCopy insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
+// TODO: this duplicates a lot of code from bulkInsertDoCopy; find a DRYer way
 func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
 	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
 	defer keyDocsPullStop()
 	pullOk := true
 	var kd *types.KeyDoc
 	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
-		totKeyArgs := 0
+		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
 		keysValueStrings := make([]string, 0, keysInBunch)
-		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns)
+		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
+		subkeysValueStrings := make([]string, 0, subkeysInBunch)
+		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
+		subkeysDocs := make([][]types.SubKeyDoc, uidsInBunch)
+		uidsValueStrings := make([]string, 0, uidsInBunch)
+		uidsValueArgs := make([]interface{}, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
+		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
 		kd, pullOk = keyDocsPull()
 		if !pullOk {
 			return true
 		}
-		for i := 0; pullOk; idx, i = idx+1, i+1 {
+		for i, j, k := 0, 0, 0; pullOk; idx, i = idx+1, i+1 {
+			subkeysDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
+			lenSKIA := len(subkeysDocs[idx])
+			lenUIA := len(uidDocs[idx])
 			totKeyArgs += keysNumColumns
-			if totKeyArgs > keysInBunch*keysNumColumns {
+			totSubkeyArgs += subkeysNumColumns * lenSKIA
+			totUidArgs += useridsNumColumns * lenUIA
+			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
 				totKeyArgs -= keysNumColumns
+				totSubkeyArgs -= subkeysNumColumns * lenSKIA
 				break
 			}
 			keysValueStrings = append(keysValueStrings,
@@ -61,18 +74,26 @@ func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hk
 			insTime := time.Now().UTC()
 			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
 				insTime, insTime, insTime, kd.MD5, kd.Keywords, kd.VFingerprint)
+
+			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
+				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
+				subkeysValueArgs = append(subkeysValueArgs,
+					subkeysDocs[idx][sidx].RFingerprint, subkeysDocs[idx][sidx].RSubKeyFp, subkeysDocs[idx][sidx].VSubKeyFp)
+			}
+			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
+				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
+				uidsValueArgs = append(uidsValueArgs,
+					uidDocs[idx][uidx].RFingerprint, uidDocs[idx][uidx].UidString, uidDocs[idx][uidx].Email, uidDocs[idx][uidx].Confidence)
+			}
 			kd, pullOk = keyDocsPull()
 		}
-		log.Debugf("attempting bulk copy of %d keys", idx-lastIdx)
-		keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint) VALUES %s",
-			keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
 
-		err := st.bulkInsertSendBunchTx(keystmt, "reindexes", keysValueArgs)
-		if err != nil {
-			result.Errors = append(result.Errors, err)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+		ok := st.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
+		if !ok {
 			return false
 		}
-		log.Debugf("%d updates sent to DB...", idx-lastIdx)
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
 	}
 	return true
 }
@@ -89,11 +110,23 @@ func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 }
 
 func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
-	log.Debugf("attempting bulk update of keys, subkeys")
-	txStrs := []string{bulkTxReindexKeys, bulkTxReindexSubkeys}
-	msgStrs := []string{"bulkTx-reindex-keys", "bulkTx-reindex-subkeys"}
+	log.Debugf("attempting bulk update of keys, subkeys, userids")
+	subkeysOK, useridsOK := true, true
+	// subkey batch-processing
+	if _, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
+		return false
+	}
+	// userid batch-processing
+	if _, useridsOK = st.bulkInsertCheckUserIDs(result); !useridsOK {
+		return false
+	}
+
+	// We don't clean up orphans because Reindex doesn't delete keys (unlike Reload)
+	txStrs := []string{bulkTxReindexKeys, bulkTxClearDupSubkeys, bulkTxClearDupUserIDs, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
+	msgStrs := []string{"bulkTx-reindex-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-dup-userids", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
+		log.Warnf("could not reindex: %v", err)
 		result.Errors = append(result.Errors, err)
 		return false
 	}
@@ -153,7 +186,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*type
 		if bookmark.Before(kd.MTime) {
 			*bookmark = kd.MTime
 		}
-		changed, err := kd.Refresh()
+		_, _, changed, err := kd.Refresh()
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 		} else if changed {

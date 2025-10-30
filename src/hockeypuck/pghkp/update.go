@@ -328,10 +328,10 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 			return errors.WithStack(err)
 		}
 	}
-	// TODO: this does not account for updating confidence over time, or for email parsing bugfixes
 	for _, uid := range uiddocs {
 		_, err := tx.Exec("INSERT INTO userids (rfingerprint, uidstring, email, confidence) "+
-			"SELECT $1::TEXT, $2::TEXT, $3::TEXT, $4::INTEGER WHERE NOT EXISTS (SELECT 1 FROM userids WHERE rfingerprint = $1 AND uidstring = $2)",
+			"VALUES ( $1::TEXT, $2::TEXT, $3::TEXT, $4::INTEGER ) "+
+			"ON CONFLICT (rfingerprint, uidstring) DO UPDATE SET email = $3::TEXT, confidence = $4::INTEGER", // gracefully update existing records
 			&uid.RFingerprint, &uid.UidString, &uid.Email, &uid.Confidence)
 		if err != nil {
 			log.Errorf("3 SQL: %q", errors.WithStack(err))

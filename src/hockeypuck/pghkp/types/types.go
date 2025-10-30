@@ -303,25 +303,26 @@ func keywordsToTSVector(keywords []string, sep string) (string, error) {
 // refresh updates the keyDoc fields that cache values from the jsonb document.
 // This is called by pghkp.refreshBunch to ensure the DB columns are correctly populated,
 // for example after changes to the keyword indexing policy, or to the DB schema.
-func (kd *KeyDoc) Refresh() (changed bool, err error) {
+func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, changed bool, err error) {
 	// Unmarshal the doc
 	var pk jsonhkp.PrimaryKey
 	err = json.Unmarshal([]byte(kd.Doc), &pk)
 	if err != nil {
-		return false, err
+		return nil, nil, false, err
 	}
 	rfp := openpgp.Reverse(pk.Fingerprint)
 	key, err := ReadOneKey(pk.Bytes(), rfp)
 	if err != nil {
-		return false, err
+		return nil, nil, false, err
 	}
 	if key == nil {
 		// ReadOneKey could not find any keys in the JSONB doc
-		return false, openpgp.ErrKeyEvaporated
+		return nil, nil, false, openpgp.ErrKeyEvaporated
 	}
+	subkeyDocs = subkeys(key)
 
 	// Regenerate keywords
-	newKeywords, _ := keywordsFromKey(key)
+	newKeywords, uidDocs := keywordsFromKey(key)
 	oldKeywords := keywordsFromTSVector(kd.Keywords)
 	slices.Sort(newKeywords)
 	slices.Sort(oldKeywords)
@@ -340,13 +341,14 @@ func (kd *KeyDoc) Refresh() (changed bool, err error) {
 	// In future we may add further tasks here.
 	// DO NOT update the md5 field, as this is used by bulkReindex to prevent simultaneous updates.
 
-	return changed, err
+	return subkeyDocs, uidDocs, changed, err
 }
 
-func subkeys(key *openpgp.PrimaryKey) []string {
-	var result []string
+func subkeys(key *openpgp.PrimaryKey) []SubKeyDoc {
+	var result []SubKeyDoc
 	for _, subkey := range key.SubKeys {
-		result = append(result, subkey.RFingerprint)
+		version := fmt.Sprintf("%02x%s", subkey.Version, subkey.Fingerprint())
+		result = append(result, SubKeyDoc{key.RFingerprint, subkey.RFingerprint, version})
 	}
 	return result
 }

@@ -42,6 +42,8 @@ import (
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
 	"hockeypuck/pghkp/types"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func Test(t *stdtesting.T) {
@@ -80,6 +82,8 @@ func (s *S) SetUpTest(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 	handler.Register(r)
 	s.srv = httptest.NewServer(r)
+
+	log.SetLevel(log.DebugLevel)
 }
 
 func (s *S) TearDownTest(c *gc.C) {
