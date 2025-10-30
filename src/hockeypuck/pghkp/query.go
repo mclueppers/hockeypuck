@@ -384,7 +384,7 @@ func (st *storage) fetchKeyDocs(rfps []string) ([]*types.KeyDoc, error) {
 		}
 		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
 	}
-	sqlStr := fmt.Sprintf("SELECT rfingerprint, doc, md5, ctime, mtime, idxtime, keywords, vfingerprint FROM keys WHERE rfingerprint IN (%s)", strings.Join(rfpIn, ","))
+	sqlStr := fmt.Sprintf("SELECT rfingerprint, doc, md5, ctime, mtime, idxtime, keywords, vfingerprint FROM keys WHERE rfingerprint IN (%s) ORDER BY idxtime ASC", strings.Join(rfpIn, ","))
 	rows, err := st.Query(sqlStr)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -422,9 +422,9 @@ func (st *storage) fetchSubKeyDocs(rfps []string, bysubfp bool) ([]*types.SubKey
 		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
 	}
 	if bysubfp {
-		sqlStr = fmt.Sprintf("SELECT rfingerprint, rsubfp, vsubfp FROM subkeys WHERE rsubfp IN (%s)", strings.Join(rfpIn, ","))
+		sqlStr = fmt.Sprintf("SELECT rfingerprint, rsubfp, vsubfp FROM subkeys WHERE rsubfp IN (%s) ORDER BY vsubfp ASC", strings.Join(rfpIn, ","))
 	} else {
-		sqlStr = fmt.Sprintf("SELECT rfingerprint, rsubfp, vsubfp FROM subkeys WHERE rfingerprint IN (%s)", strings.Join(rfpIn, ","))
+		sqlStr = fmt.Sprintf("SELECT rfingerprint, rsubfp, vsubfp FROM subkeys WHERE rfingerprint IN (%s) ORDER BY vsubfp ASC", strings.Join(rfpIn, ","))
 	}
 	rows, err := st.Query(sqlStr)
 	if err != nil {

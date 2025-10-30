@@ -89,9 +89,9 @@ func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 }
 
 func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
-	log.Debugf("attempting bulk update of keys")
-	txStrs := []string{bulkTxReindexKeys}
-	msgStrs := []string{"bulkTx-reindex-keys"}
+	log.Debugf("attempting bulk update of keys, subkeys")
+	txStrs := []string{bulkTxReindexKeys, bulkTxReindexSubkeys}
+	msgStrs := []string{"bulkTx-reindex-keys", "bulkTx-reindex-subkeys"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)

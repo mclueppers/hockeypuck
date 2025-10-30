@@ -321,7 +321,8 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 	}
 	for _, subKey := range key.SubKeys {
 		_, err := tx.Exec("INSERT INTO subkeys (rfingerprint, rsubfp, vsubfp) "+
-			"SELECT $1::TEXT, $2::TEXT, $3::TEXT WHERE NOT EXISTS (SELECT 1 FROM subkeys WHERE rsubfp = $2)",
+			"VALUES ( $1::TEXT, $2::TEXT, $3::TEXT ) "+
+			"ON CONFLICT (rsubfp) DO UPDATE SET vsubfp = $3::TEXT", // gracefully update existing records
 			&key.RFingerprint, &subKey.RFingerprint, &subKey.VFingerprint)
 		if err != nil {
 			return errors.WithStack(err)

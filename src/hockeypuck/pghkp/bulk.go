@@ -128,7 +128,7 @@ NOT EXISTS (SELECT 1 FROM subkeys WHERE subkeys.rsubfp = subkeys_copyin.rsubfp) 
   EXISTS (SELECT 1 FROM keys_copyin  WHERE keys_copyin.rfingerprint  = subkeys_copyin.rfingerprint) )
 `
 
-// bulkTxFilterUniqueSubkeys is a userid-filtering query, between temporary tables, used for bulk
+// bulkTxFilterUniqueUserIDs is a userid-filtering query, between temporary tables, used for bulk
 // insertion. Among all the userids of keys in a call to Insert(..) (usually the keys in a processed
 // key-dump file), this filter gets the unique userids, i.e., those with no NULL fields that are not
 // duplicates (unique among userids of keys in this call to Insert(..) that do not currently exist in the DB).
@@ -146,10 +146,10 @@ NOT EXISTS (SELECT 1 FROM userids WHERE userids.rfingerprint = uidcpinA.rfingerp
   EXISTS (SELECT 1 FROM keys_copyin  WHERE keys_copyin.rfingerprint  = uidcpinA.rfingerprint) )
 `
 
-// bulkTxPrepSubkeyStats is a userid-processing query on bulk insertion temporary tables that
+// bulkTxPrepUserIDStats is a userid-processing query on bulk insertion temporary tables that
 // facilitates calculation of statistics on userids and subsequent additional filtering. Out of
 // all the userids of keys in a call to Insert(..) (usually the keys in a processed key-dump file),
-// this query keeps only duplicates by dropping userids previously set aside by bulkTxFilterUniqueSubkeys
+// this query keeps only duplicates by dropping userids previously set aside by bulkTxFilterUniqueUserIDs
 // query and removing any tuples with NULLs.
 const bulkTxPrepUserIDStats string = `DELETE FROM userids_copyin WHERE
 rfingerprint IS NULL OR uidstring IS NULL OR confidence IS NULL OR
@@ -243,6 +243,12 @@ const bulkTxClearDupUserIDs string = `DELETE FROM userids WHERE rfingerprint IN
 const bulkTxReindexKeys string = `UPDATE keys
 SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords, vfingerprint = keys_copyin.vfingerprint FROM keys_copyin
 WHERE keys.md5 = keys_copyin.md5
+`
+
+// bulkTxReindexSubkeys is the query for updating the subkeys table schema to populate the vsubfp column in existing rows.
+const bulkTxReindexSubkeys string = `UPDATE subkeys
+SET vsubfp = '04' || reverse(rsubfp)
+WHERE vsubfp = '' AND rfingerprint IN ( SELECT rfingerprint from keys_copyin )
 `
 
 // Stats collection queries
@@ -613,9 +619,9 @@ func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSu
 	// Batch UPDATE all keys from memory tables (should need no checks!!!!)
 	// Final batch-update in keys/subkeys tables without any checks: _must not_ give any errors
 	txStrs := []string{bulkTxJournalKeys, bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs,
-		bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys, bulkTxInsertUserIDs}
+		bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs}
 	msgStrs := []string{"bulkTx-journal-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
-		"bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys", "bulkTx-insert-userids"}
+		"bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids"}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)

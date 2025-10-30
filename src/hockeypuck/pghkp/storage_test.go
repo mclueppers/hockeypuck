@@ -668,10 +668,14 @@ func (s *S) TestReindex(c *gc.C) {
 	// Now reset the reindexable columns of the test key's DB record
 	_, err := s.storage.Exec(`UPDATE keys SET keywords = '', vfingerprint = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's key"))
-	_, err = s.storage.Exec(`UPDATE subkeys SET vsubfp = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	_, err = s.storage.Exec(`UPDATE subkeys SET vsubfp = '' WHERE rsubfp = $1`, openpgp.Reverse("636e5e7c575d2e971318b663ca7e517d2a42ac0a"))
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's subkey"))
-	_, err = s.storage.Exec(`DELETE FROM userids WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
-	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userids"))
+	_, err = s.storage.Exec(`DELETE FROM subkeys WHERE rsubfp = $1`, openpgp.Reverse("6f6d93d0811d1f8b7a34944b782e33de1a96e4c8"))
+	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's subkey"))
+	_, err = s.storage.Exec(`UPDATE userids SET email = '' WHERE email = 'cmars@cmarstech.com'`)
+	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's userid"))
+	_, err = s.storage.Exec(`DELETE FROM userids WHERE email = 'casey.marshall@canonical.com'`)
+	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userid"))
 
 	oldkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
 	comment := gc.Commentf("fetch 8d7c6b1a49166a46ff293af2d4236eabe68e311d")
@@ -768,10 +772,14 @@ func (s *S) setupReload(c *gc.C) (oldkeydocs []*types.KeyDoc) {
 	_, err = s.storage.Exec(`UPDATE keys SET keywords = '', vfingerprint = '', doc = $2 WHERE rfingerprint = $1`,
 		openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), newdoc)
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's key"))
-	_, err = s.storage.Exec(`UPDATE subkeys SET vsubfp = '' WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
+	_, err = s.storage.Exec(`UPDATE subkeys SET vsubfp = '' WHERE rsubfp = $1`, openpgp.Reverse("636e5e7c575d2e971318b663ca7e517d2a42ac0a"))
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's subkey"))
-	_, err = s.storage.Exec(`DELETE FROM userids WHERE rfingerprint = $1`, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"))
-	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userids"))
+	_, err = s.storage.Exec(`DELETE FROM subkeys WHERE rsubfp = $1`, openpgp.Reverse("6f6d93d0811d1f8b7a34944b782e33de1a96e4c8"))
+	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's subkey"))
+	_, err = s.storage.Exec(`UPDATE userids SET email = '' WHERE email = 'cmars@cmarstech.com'`)
+	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's userid"))
+	_, err = s.storage.Exec(`DELETE FROM userids WHERE email = 'casey.marshall@canonical.com'`)
+	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userid"))
 
 	return oldkeydocs
 }
