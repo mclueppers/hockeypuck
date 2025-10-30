@@ -26,7 +26,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"strings"
 	stdtesting "testing"
 	"time"
 
@@ -637,7 +636,7 @@ func (s *S) TestBulkInsert(c *gc.C) {
 	c.Assert(err, gc.IsNil, comment)
 	c.Assert(newkeydocs, gc.HasLen, 1, comment)
 	c.Assert(newkeydocs[0].Keywords, gc.Equals, "'example-10101010' 'example-10101010@example.com' 'example.com' 'testing' 'testing <example-10101010@example.com>'", comment)
-	c.Assert(newkeydocs[0].VFingerprint, gc.Equals, strings.ToLower("0400BC6161D88D85E9EF87C55826707FFC4FB750D8"), comment)
+	c.Assert(newkeydocs[0].VFingerprint, gc.Equals, "0400bc6161d88d85e9ef87c55826707ffc4fb750d8", comment)
 
 	newsubkeydocs, err := s.storage.fetchSubKeyDocs([]string{openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8")}, false)
 	comment = gc.Commentf("fetch subkeys 00BC6161D88D85E9EF87C55826707FFC4FB750D8")
