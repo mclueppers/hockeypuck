@@ -18,9 +18,6 @@
 package pghkp
 
 import (
-	"fmt"
-	"iter"
-	"maps"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -34,129 +31,6 @@ import (
 //
 // Reindexer implementation
 //
-
-// bulkReindexDoCopy insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
-// TODO: this duplicates a lot of code from bulkInsertDoCopy; find a DRYer way
-func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
-	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
-	defer keyDocsPullStop()
-	pullOk := true
-	var kd *types.KeyDoc
-	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
-		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
-		keysValueStrings := make([]string, 0, keysInBunch)
-		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
-		subkeysValueStrings := make([]string, 0, subkeysInBunch)
-		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
-		subkeysDocs := make([][]types.SubKeyDoc, uidsInBunch)
-		uidsValueStrings := make([]string, 0, uidsInBunch)
-		uidsValueArgs := make([]interface{}, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
-		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
-		kd, pullOk = keyDocsPull()
-		if !pullOk {
-			return true
-		}
-		for i, j, k := 0, 0, 0; pullOk; idx, i = idx+1, i+1 {
-			subkeysDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
-			lenSKIA := len(subkeysDocs[idx])
-			lenUIA := len(uidDocs[idx])
-			totKeyArgs += keysNumColumns
-			totSubkeyArgs += subkeysNumColumns * lenSKIA
-			totUidArgs += useridsNumColumns * lenUIA
-			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
-				totKeyArgs -= keysNumColumns
-				totSubkeyArgs -= subkeysNumColumns * lenSKIA
-				break
-			}
-			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
-					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
-			insTime := time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
-				insTime, insTime, insTime, kd.MD5, kd.Keywords, kd.VFingerprint)
-
-			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
-				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
-				subkeysValueArgs = append(subkeysValueArgs,
-					subkeysDocs[idx][sidx].RFingerprint, subkeysDocs[idx][sidx].RSubKeyFp, subkeysDocs[idx][sidx].VSubKeyFp)
-			}
-			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
-				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
-				uidsValueArgs = append(uidsValueArgs,
-					uidDocs[idx][uidx].RFingerprint, uidDocs[idx][uidx].UidString, uidDocs[idx][uidx].Identity, uidDocs[idx][uidx].Confidence)
-			}
-			kd, pullOk = keyDocsPull()
-		}
-
-		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
-		ok := st.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
-		if !ok {
-			return false
-		}
-		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
-	}
-	return true
-}
-
-func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
-	var keysReindexed int
-	err := st.QueryRow(bulkCopiedKeysNum).Scan(&keysReindexed)
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-		log.Warnf("could not update reindex stats: %v", err)
-		keysReindexed = 0
-	}
-	return keysReindexed
-}
-
-func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
-	log.Debugf("attempting bulk update of keys, subkeys, userids")
-	subkeysOK, useridsOK := true, true
-	// subkey batch-processing
-	if _, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
-		return false
-	}
-	// userid batch-processing
-	if _, useridsOK = st.bulkInsertCheckUserIDs(result); !useridsOK {
-		return false
-	}
-
-	// We don't clean up orphans because Reindex doesn't delete keys (unlike Reload)
-	txStrs := []string{bulkTxReindexKeys, bulkTxClearDupSubkeys, bulkTxClearDupUserIDs, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
-	msgStrs := []string{"bulkTx-reindex-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-dup-userids", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
-	err := st.bulkExecSingleTx(txStrs, msgStrs)
-	if err != nil {
-		log.Warnf("could not reindex: %v", err)
-		result.Errors = append(result.Errors, err)
-		return false
-	}
-	return true
-}
-
-func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
-	log.Infof("attempting bulk reindex of %d keys", len(keyDocs))
-	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
-	err := st.bulkCreateTempTables()
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-		return 0, false
-	}
-	defer st.bulkDropTempTables()
-	keysReindexed := 0
-	if !st.bulkReindexDoCopy(maps.Values(keyDocs), result) {
-		return 0, false
-	}
-	if !st.bulkReindexKeys(result) {
-		return 0, false
-	}
-
-	keysReindexed = st.bulkReindexGetStats(result)
-	err = st.bulkDropTempTables()
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-	}
-	return keysReindexed, true
-}
 
 // refreshBunch fetches a bunch of keyDocs from the DB and returns freshened copies of the ones with stale records.
 //

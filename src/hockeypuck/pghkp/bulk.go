@@ -24,6 +24,8 @@ import (
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
 	"hockeypuck/pghkp/types"
+	"iter"
+	"maps"
 	"strings"
 	"time"
 
@@ -35,284 +37,6 @@ import (
 //
 // Private bulk-update helpers for use by Updater, Reindexer, Reloader etc.
 //
-
-// bulkTxFilterUniqueKeys is a key-filtering query, between temporary tables, used for bulk insertion.
-// Among all the keys in a call to Insert(..) (usually the keys in a processed key-dump file), this
-// filter gets the unique keys, i.e., those with unique rfingerprint *and* unique md5, but *neither*
-// with rfingerprint *nor* with md5 that currently exist in the DB.
-const bulkTxFilterUniqueKeys string = `INSERT INTO keys_checked (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint)
-SELECT rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint FROM keys_copyin kcpinA WHERE
-rfingerprint IS NOT NULL AND doc IS NOT NULL AND ctime IS NOT NULL AND mtime IS NOT NULL AND idxtime IS NOT NULL AND md5 IS NOT NULL AND vfingerprint IS NOT NULL AND
-(SELECT COUNT (*) FROM keys_copyin kcpinB WHERE kcpinB.rfingerprint = kcpinA.rfingerprint OR
-                                                kcpinB.md5          = kcpinA.md5) = 1 AND
-NOT EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = kcpinA.rfingerprint OR keys.md5 = kcpinA.md5)
-`
-
-// bulkTxPrepKeyStats is a key-processing query on bulk insertion temporary tables that facilitates
-// calculation of statistics on keys and subsequent additional filtering. Out of all the keys in a
-// call to Insert(..) (usually the keys in a processed key-dump file), this query keeps only duplicates
-// by dropping keys previously set aside by bulkTxFilterUniqueKeys query and removing any tuples
-// with NULLs.
-const bulkTxPrepKeyStats string = `DELETE FROM keys_copyin WHERE
-rfingerprint IS NULL OR doc IS NULL OR ctime IS NULL OR mtime IS NULL OR idxtime IS NULL OR md5 IS NULL OR
-EXISTS (SELECT 1 FROM keys_checked WHERE keys_checked.rfingerprint = keys_copyin.rfingerprint)
-`
-
-// bulkTxFilterDupKeys is the final key-filtering query, between temporary tables, used for bulk
-// insertion. Among all the keys in a call to Insert(..) (usually the keys in a processed key-dump
-// file), this query sets aside for final DB insertion _a single copy_ of those keys that are
-// duplicates in the arguments of Insert(..), but do not yet exist in the DB.
-const bulkTxFilterDupKeys string =
-// *** ctid field is PostgreSQL-specific; Oracle has ROWID equivalent field ***
-// ===> If there are different md5 for same rfp, this query allows them into keys_checked: <===
-// ===>  ***  an intentional error of non-unique rfp, to revert to normal insertion!  ***  <===
-`INSERT INTO keys_checked (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint)
-SELECT rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint FROM keys_copyin WHERE
-( ctid IN
-     (SELECT ctid FROM
-        (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY rfingerprint ORDER BY ctid) rfpEnum FROM keys_copyin) AS dupRfpTAB
-        WHERE rfpEnum = 1) OR
-  ctid IN
-     (SELECT ctid FROM
-        (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY md5 ORDER BY ctid) md5Enum FROM keys_copyin) AS dupMd5TAB
-        WHERE md5Enum = 1) ) AND
-NOT EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = keys_copyin.rfingerprint OR
-                                     keys.md5          = keys_copyin.md5)
-`
-
-// bulkTxFilterUniqueSubkeys is a subkey-filtering query, between temporary tables, used for bulk
-// insertion. Among all the subkeys of keys in a call to Insert(..) (usually the keys in a processed
-// key-dump file), this filter gets the unique subkeys, i.e., those with no NULL fields that are not
-// duplicates (unique among subkeys of keys in this call to Insert(..) that do not currently exist in the DB).
-const bulkTxFilterUniqueSubkeys string =
-// Enforce foreign key constraint by checking both keys_checked and keys_copyin (instead of keys)
-// Avoid checking "EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = skcpinA.rfingerprint)"
-// by checking in keys_copyin (despite no indexing): only duplicates (in-file or _in DB_) are
-// still in keys_copyin
-`INSERT INTO subkeys_checked (rfingerprint, rsubfp, vsubfp)
-SELECT rfingerprint, rsubfp, vsubfp FROM subkeys_copyin skcpinA WHERE
-skcpinA.rfingerprint IS NOT NULL AND skcpinA.rsubfp IS NOT NULL AND skcpinA.vsubfp IS NOT NULL AND
-(SELECT COUNT(*) FROM subkeys_copyin skcpinB WHERE skcpinB.rsubfp = skcpinA.rsubfp) = 1 AND
-NOT EXISTS (SELECT 1 FROM subkeys WHERE subkeys.rsubfp = skcpinA.rsubfp) AND
-( EXISTS (SELECT 1 FROM keys_checked WHERE keys_checked.rfingerprint = skcpinA.rfingerprint) OR
-  EXISTS (SELECT 1 FROM keys_copyin  WHERE keys_copyin.rfingerprint  = skcpinA.rfingerprint) )
-`
-
-// bulkTxPrepSubkeyStats is a subkey-processing query on bulk insertion temporary tables that
-// facilitates calculation of statistics on subkeys and subsequent additional filtering. Out of
-// all the subkeys of keys in a call to Insert(..) (usually the keys in a processed key-dump file),
-// this query keeps only duplicates by dropping subkeys previously set aside by bulkTxFilterUniqueSubkeys
-// query and removing any tuples with NULLs.
-const bulkTxPrepSubkeyStats string = `DELETE FROM subkeys_copyin WHERE
-rfingerprint IS NULL OR rsubfp IS NULL OR vsubfp IS NULL OR
-EXISTS (SELECT 1 FROM subkeys_checked WHERE subkeys_checked.rsubfp = subkeys_copyin.rsubfp)
-`
-
-// bulkTxFilterDupSubkeys is the final subkey-filtering query, between temporary tables, used for
-// bulk insertion. Among all the subkeys of keys in a call to Insert(..) (usually the keys in a processed
-// key-dump file), this query sets aside for final DB insertion _a single copy_ of those subkeys that are
-// duplicates in the arguments of Insert(..), but do not yet exist in the DB.
-const bulkTxFilterDupSubkeys string =
-// Enforce foreign key constraint by checking both keys_checked and keys_copyin (instead of keys)
-// *** ctid field is PostgreSQL-specific; Oracle has ROWID equivalent field ***
-// Avoid checking "EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = subkeys_copyin.rfingerprint)"
-// by checking in keys_copyin (despite no indexing): only dups (in-file or _in DB_) still in keys_copyin
-`INSERT INTO subkeys_checked (rfingerprint, rsubfp, vsubfp)
-SELECT rfingerprint, rsubfp, vsubfp FROM subkeys_copyin WHERE
-ctid IN
-   (SELECT ctid FROM
-      (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY rsubfp ORDER BY ctid) rsubfpEnum FROM subkeys_copyin) AS dupRsubfpTAB
-      WHERE rsubfpEnum = 1) AND
-NOT EXISTS (SELECT 1 FROM subkeys WHERE subkeys.rsubfp = subkeys_copyin.rsubfp) AND
-( EXISTS (SELECT 1 FROM keys_checked WHERE keys_checked.rfingerprint = subkeys_copyin.rfingerprint) OR
-  EXISTS (SELECT 1 FROM keys_copyin  WHERE keys_copyin.rfingerprint  = subkeys_copyin.rfingerprint) )
-`
-
-// bulkTxFilterUniqueUserIDs is a userid-filtering query, between temporary tables, used for bulk
-// insertion. Among all the userids of keys in a call to Insert(..) (usually the keys in a processed
-// key-dump file), this filter gets the unique userids, i.e., those with no NULL fields that are not
-// duplicates (unique among userids of keys in this call to Insert(..) that do not currently exist in the DB).
-const bulkTxFilterUniqueUserIDs string =
-// Enforce foreign key constraint by checking both keys_checked and keys_copyin (instead of keys)
-// Avoid checking "EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = uidcpinA.rfingerprint)"
-// by checking in keys_copyin (despite no indexing): only duplicates (in-file or _in DB_) are
-// still in keys_copyin
-`INSERT INTO userids_checked (rfingerprint, uidstring, identity, confidence)
-SELECT rfingerprint, uidstring, identity, confidence FROM userids_copyin uidcpinA WHERE
-uidcpinA.rfingerprint IS NOT NULL AND uidcpinA.uidstring IS NOT NULL AND uidcpinA.confidence IS NOT NULL AND
-(SELECT COUNT(*) FROM userids_copyin uidcpinB WHERE uidcpinB.rfingerprint = uidcpinA.rfingerprint AND uidcpinB.uidstring = uidcpinA.uidstring) = 1 AND
-NOT EXISTS (SELECT 1 FROM userids WHERE userids.rfingerprint = uidcpinA.rfingerprint AND userids.uidstring = uidcpinA.uidstring) AND
-( EXISTS (SELECT 1 FROM keys_checked WHERE keys_checked.rfingerprint = uidcpinA.rfingerprint) OR
-  EXISTS (SELECT 1 FROM keys_copyin  WHERE keys_copyin.rfingerprint  = uidcpinA.rfingerprint) )
-`
-
-// bulkTxPrepUserIDStats is a userid-processing query on bulk insertion temporary tables that
-// facilitates calculation of statistics on userids and subsequent additional filtering. Out of
-// all the userids of keys in a call to Insert(..) (usually the keys in a processed key-dump file),
-// this query keeps only duplicates by dropping userids previously set aside by bulkTxFilterUniqueUserIDs
-// query and removing any tuples with NULLs.
-const bulkTxPrepUserIDStats string = `DELETE FROM userids_copyin WHERE
-rfingerprint IS NULL OR uidstring IS NULL OR confidence IS NULL OR
-EXISTS (SELECT 1 FROM userids_checked WHERE userids_checked.rfingerprint = userids_copyin.rfingerprint AND userids_checked.uidstring = userids_copyin.uidstring)
-`
-
-// bulkTxFilterDupUserIDs is the final userid-filtering query, between temporary tables, used for
-// bulk insertion. Among all the userids of keys in a call to Insert(..) (usually the keys in a processed
-// key-dump file), this query sets aside for final DB insertion _a single copy_ of those userids that are
-// duplicates in the arguments of Insert(..), but do not yet exist in the DB.
-const bulkTxFilterDupUserIDs string =
-// Enforce foreign key constraint by checking both keys_checked and keys_copyin (instead of keys)
-// *** ctid field is PostgreSQL-specific; Oracle has ROWID equivalent field ***
-// Avoid checking "EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = userids_copyin.rfingerprint)"
-// by checking in keys_copyin (despite no indexing): only dups (in-file or _in DB_) still in keys_copyin
-`INSERT INTO userids_checked (rfingerprint, uidstring, identity, confidence)
-SELECT rfingerprint, uidstring, identity, confidence FROM userids_copyin WHERE
-ctid IN
-   (SELECT ctid FROM
-      (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY uidstring ORDER BY ctid) uidstringEnum FROM userids_copyin) AS dupRsubfpTAB
-      WHERE uidstringEnum = 1) AND
-NOT EXISTS (SELECT 1 FROM userids WHERE userids.rfingerprint = userids_copyin.rfingerprint AND userids.uidstring = userids_copyin.uidstring) AND
-( EXISTS (SELECT 1 FROM keys_checked WHERE keys_checked.rfingerprint = userids_copyin.rfingerprint) OR
-  EXISTS (SELECT 1 FROM keys_copyin  WHERE keys_copyin.rfingerprint  = userids_copyin.rfingerprint) )
-`
-
-// bulkTxInsertKeys is the query for final bulk key insertion, from a temporary table to the DB.
-const bulkTxInsertKeys string = `INSERT INTO keys (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint)
-SELECT rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint FROM keys_checked
-`
-
-// bulkTxInsertSubkeys is the query for final bulk subkey insertion, from a temporary table to the DB.
-const bulkTxInsertSubkeys string = `INSERT INTO subkeys (rfingerprint, rsubfp, vsubfp)
-SELECT rfingerprint, rsubfp, vsubfp FROM subkeys_checked
-`
-
-// bulkTxInsertUserIDs is the query for final bulk userid insertion, from a temporary table to the DB.
-const bulkTxInsertUserIDs string = `INSERT INTO userids (rfingerprint, uidstring, identity, confidence)
-SELECT rfingerprint, uidstring, identity, confidence FROM userids_checked
-`
-
-// bulkTxJournalKeys saves the current rows (without json docs) of all the keys about to be updated.
-const bulkTxJournalKeys string = `INSERT INTO keys_checked (rfingerprint, doc, md5, ctime, mtime, idxtime, vfingerprint)
-SELECT rfingerprint, '{}', md5, ctime, mtime, idxtime, vfingerprint FROM keys WHERE rfingerprint IN ( SELECT rfingerprint FROM keys_copyin )
-`
-
-// bulkTxClearOrphanSubkeys deletes all subkeys of keys that are referenced from the keys_old table but are not in the keys_copyin table.
-// It MUST be called before calling bulkTxClearKeys (see below).
-const bulkTxClearOrphanSubkeys string = `DELETE FROM subkeys WHERE rfingerprint IN
-	( SELECT rfingerprint FROM keys_old WHERE rfingerprint NOT IN ( SELECT rfingerprint from keys_copyin ) )
-`
-
-// bulkTxClearOrphanUserIDs deletes all userids of keys that are referenced from the keys_old table but are not in the keys_copyin table.
-// It MUST be called before calling bulkTxClearKeys (see below).
-const bulkTxClearOrphanUserIDs string = `DELETE FROM userids WHERE rfingerprint IN
-	( SELECT rfingerprint FROM keys_old WHERE rfingerprint NOT IN ( SELECT rfingerprint from keys_copyin ) )
-`
-
-// bulkTxClearKeys deletes all keys that are referenced from the keys_old table but are not in the keys_copyin table.
-// You MUST call bulkTxClearOrphanSubkeys and bulkTxClearOrphanUserIDs first (see above).
-const bulkTxClearKeys string = `DELETE FROM keys WHERE rfingerprint IN
-	( SELECT rfingerprint FROM keys_old WHERE rfingerprint NOT IN ( SELECT rfingerprint from keys_copyin ) )
-`
-
-// bulkTxUpdateKeys is the query for final bulk key update, from a temporary table to the DB.
-// Does not update ctime or rfingerprint.
-const bulkTxUpdateKeys string = `UPDATE keys SET
-doc = c.doc, mtime = c.mtime, idxtime = c.idxtime, md5 = c.md5, keywords = c.keywords, vfingerprint = c.vfingerprint
-FROM keys_copyin as c
-WHERE keys.rfingerprint = c.rfingerprint
-`
-
-// bulkTxClearDupSubkeys is the query to clear existing subkey entries from the subkeys table
-// if they are not still present in the subkeys_copyin table after deduplication
-// (i.e. they would have been queued for addition if they were not already present in subkeys).
-const bulkTxClearDupSubkeys string = `DELETE FROM subkeys WHERE rfingerprint IN
-	( SELECT rfingerprint FROM subkeys_copyin UNION ALL SELECT rfingerprint FROM subkeys_checked )
-	AND rsubfp NOT IN (SELECT rsubfp FROM subkeys_copyin)
-`
-
-// bulkTxClearDupUserIDs is the query to clear existing userid entries from the userids table
-// if they are not still present in the userids_copyin table after deduplication
-// (i.e. they would have been queued for addition if they were not already present in userids).
-const bulkTxClearDupUserIDs string = `DELETE FROM userids WHERE rfingerprint IN
-	( SELECT rfingerprint FROM userids_copyin UNION ALL SELECT rfingerprint FROM userids_checked )
-	AND uidstring NOT IN (SELECT uidstring FROM userids_copyin)
-`
-
-// bulkTxReindexKeys is the query for updating the SQL schema only, from a temporary table to the DB.
-// We match on the md5 field only, to prevent race conditions (this is safe since md5 is UNIQUE).
-const bulkTxReindexKeys string = `UPDATE keys
-SET idxtime = keys_copyin.idxtime, keywords = keys_copyin.keywords, vfingerprint = keys_copyin.vfingerprint FROM keys_copyin
-WHERE keys.md5 = keys_copyin.md5
-`
-
-// bulkTxReindexSubkeys is the query for updating the subkeys table schema to populate the vsubfp column in existing rows.
-const bulkTxReindexSubkeys string = `UPDATE subkeys
-SET vsubfp = subkeys_copyin.vsubfp FROM subkeys_copyin
-WHERE subkeys.rsubfp = subkeys_copyin.rsubfp
-`
-
-// bulkTxReindexUserIDs is the query for updating the userids table schema to (re)populate the identity and confidence columns in existing rows.
-const bulkTxReindexUserIDs string = `UPDATE userids
-SET identity = userids_copyin.identity, confidence = userids_copyin.confidence FROM userids_copyin
-WHERE userids.rfingerprint = userids_copyin.rfingerprint AND userids.uidstring = userids_copyin.uidstring
-`
-
-// Stats collection queries
-
-const bulkInsNumNullKeys string = `SELECT COUNT (*) FROM keys_copyin WHERE
-rfingerprint IS NULL OR doc IS NULL OR ctime IS NULL OR mtime IS NULL OR idxtime IS NULL OR md5 IS NULL
-`
-const bulkInsNumNullSubkeys string = `SELECT COUNT (*) FROM subkeys_copyin WHERE
-rfingerprint IS NULL OR rsubfp IS NULL
-`
-const bulkInsNumNullUserIDs string = `SELECT COUNT (*) FROM userids_copyin WHERE
-rfingerprint IS NULL OR uidstring IS NULL
-`
-const bulkInsNumMinDups string = `SELECT COUNT (*) FROM keys_copyin WHERE
-( ( NOT EXISTS (SELECT 1 FROM keys_checked WHERE keys_checked.rfingerprint = keys_copyin.rfingerprint OR
-                                                 keys_checked.md5          = keys_copyin.md5) AND
-    ctid IN
-       (SELECT ctid FROM
-          (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY rfingerprint ORDER BY ctid) rfpEnum FROM keys_copyin) AS dupRfpTAB
-          WHERE rfpEnum = 1) ) OR
-  ctid IN
-     (SELECT ctid FROM
-        (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY rfingerprint) rfpEnum FROM keys_copyin) AS dupRfpTAB
-        WHERE rfpEnum > 1) ) AND
-NOT EXISTS (SELECT 1 FROM subkeys_checked WHERE subkeys_checked.rfingerprint = keys_copyin.rfingerprint) AND
-NOT EXISTS (SELECT 1 FROM userids_checked WHERE userids_checked.rfingerprint = keys_copyin.rfingerprint)
-`
-const bulkInsNumPossibleDups string = `SELECT COUNT (*) FROM keys_copyin WHERE
-ctid IN
-   (SELECT ctid FROM
-      (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY rfingerprint) rfpEnum FROM keys_copyin) AS dupRfpTAB
-      WHERE rfpEnum > 1) AND
-EXISTS (SELECT 1 FROM subkeys_checked WHERE subkeys_checked.rfingerprint = keys_copyin.rfingerprint) AND
-EXISTS (SELECT 1 FROM userids_checked WHERE userids_checked.rfingerprint = keys_copyin.rfingerprint)
-`
-const bulkInsertedKeysNum string = `SELECT COUNT (*) FROM keys_checked
-`
-const bulkInsertedSubkeysNum string = `SELECT COUNT (*) FROM subkeys_checked
-`
-const bulkInsertedUserIDsNum string = `SELECT COUNT (*) FROM userids_checked
-`
-const bulkCopiedKeysNum string = `SELECT COUNT (*) FROM keys_copyin
-`
-const bulkDeletedKeysNum string = `SELECT COUNT (*) FROM keys_old WHERE rfingerprint NOT IN ( SELECT rfingerprint FROM keys_copyin )
-`
-
-const bulkInsQueryKeyChange string = `SELECT md5 FROM keys_checked
-`
-
-const bulkUpdQueryKeyAdded string = `SELECT md5 FROM keys_copyin WHERE md5 NOT IN (SELECT md5 from keys_checked)
-`
-const bulkUpdQueryKeyRemoved string = `SELECT md5 FROM keys_checked WHERE md5 NOT IN (SELECT md5 from keys_copyin)
-`
-
-const keys_copyin_temp_table_name string = "keys_copyin"
-const subkeys_copyin_temp_table_name string = "subkeys_copyin"
-const userids_copyin_temp_table_name string = "userids_copyin"
-const keys_old_temp_table_name string = "keys_old"
 
 // keysInBunch is the maximum number of keys sent in a bunch during bulk insertion.
 // Since keys (and subkeys) are sent to the DB in prepared statements with parameters and
@@ -335,86 +59,6 @@ const uidsInBunch int = 64000 / useridsNumColumns
 // minKeys2UseBulk is the minimum number of keys in a call to Insert(..) that
 // will trigger a bulk insertion. Otherwise, Insert(..) preceeds one key at a time.
 const minKeys2UseBulk int = 3500
-
-var crTempTablesSQL = []string{
-	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_copyin
-(
-rfingerprint TEXT,
-doc jsonb,
-ctime TIMESTAMPTZ,
-mtime TIMESTAMPTZ,
-idxtime TIMESTAMPTZ,
-md5 TEXT,
-keywords tsvector,
-vfingerprint TEXT
-)
-`,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS subkeys_copyin
-(
-rfingerprint TEXT,
-rsubfp TEXT,
-vsubfp TEXT
-)
-`,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS userids_copyin
-(
-rfingerprint TEXT,
-uidstring TEXT,
-identity TEXT,
-confidence INTEGER
-)
-`,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_checked
-(
-rfingerprint TEXT NOT NULL PRIMARY KEY,
-doc jsonb NOT NULL,
-ctime TIMESTAMPTZ NOT NULL,
-mtime TIMESTAMPTZ NOT NULL,
-idxtime TIMESTAMPTZ NOT NULL,
-md5 TEXT NOT NULL UNIQUE,
-keywords tsvector,
-vfingerprint TEXT NOT NULL UNIQUE
-)
-`,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS subkeys_checked
-(
-rfingerprint TEXT NOT NULL,
-rsubfp TEXT NOT NULL PRIMARY KEY,
-vsubfp TEXT NOT NULL UNIQUE
-)
-`,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS userids_checked
-(
-rfingerprint TEXT NOT NULL,
-uidstring TEXT NOT NULL,
-identity TEXT,
-confidence INTEGER NOT NULL,
-PRIMARY KEY (rfingerprint, uidstring)
-)
-`,
-	`CREATE TEMPORARY TABLE IF NOT EXISTS keys_old
-(
-rfingerprint TEXT NOT NULL PRIMARY KEY
-)
-`,
-}
-
-var drTempTablesSQL = []string{
-	`DROP TABLE IF EXISTS subkeys_copyin CASCADE
-`,
-	`DROP TABLE IF EXISTS userids_copyin CASCADE
-`,
-	`DROP TABLE IF EXISTS keys_copyin CASCADE
-`,
-	`DROP TABLE IF EXISTS subkeys_checked CASCADE
-`,
-	`DROP TABLE IF EXISTS userids_checked CASCADE
-`,
-	`DROP TABLE IF EXISTS keys_checked CASCADE
-`,
-	`DROP TABLE IF EXISTS keys_old CASCADE
-`,
-}
 
 func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (maxDups, minDups, keysInserted, subkeysInserted, useridsInserted int) {
 	// Get Duplicate stats
@@ -840,7 +484,7 @@ func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result
 
 func (st *storage) bulkDropTempTables() error {
 	// Drop the 2 pairs (all) of temporary tables
-	err := st.bulkExecSingleTx(drTempTablesSQL, sqlDesc(drTempTablesSQL))
+	err := st.bulkExecSingleTx(drTempTablesSQL, []string{"dr-temp-tables"})
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -848,9 +492,9 @@ func (st *storage) bulkDropTempTables() error {
 }
 
 func (st *storage) bulkCreateTempTables() error {
-	err := st.bulkExecSingleTx(crTempTablesSQL, sqlDesc(crTempTablesSQL))
+	err := st.bulkExecSingleTx(crTempTablesSQL, []string{"cr-temp-tables"})
 	if err != nil {
-		return errors.Wrap(err, "cannot drop temporary tables")
+		return errors.Wrap(err, "cannot create temporary tables")
 	}
 	return nil
 }
@@ -925,4 +569,127 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 	// FIXME: Imitate returning duplicates for reporting. Can be removed.
 	result.Duplicates = make([]*openpgp.PrimaryKey, minDups)
 	return keysInserted, keysDeleted, true
+}
+
+// bulkReindexDoCopy insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
+// TODO: this duplicates a lot of code from bulkInsertDoCopy; find a DRYer way
+func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
+	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
+	defer keyDocsPullStop()
+	pullOk := true
+	var kd *types.KeyDoc
+	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
+		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
+		keysValueStrings := make([]string, 0, keysInBunch)
+		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
+		subkeysValueStrings := make([]string, 0, subkeysInBunch)
+		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
+		subkeysDocs := make([][]types.SubKeyDoc, uidsInBunch)
+		uidsValueStrings := make([]string, 0, uidsInBunch)
+		uidsValueArgs := make([]interface{}, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
+		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
+		kd, pullOk = keyDocsPull()
+		if !pullOk {
+			return true
+		}
+		for i, j, k := 0, 0, 0; pullOk; idx, i = idx+1, i+1 {
+			subkeysDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
+			lenSKIA := len(subkeysDocs[idx])
+			lenUIA := len(uidDocs[idx])
+			totKeyArgs += keysNumColumns
+			totSubkeyArgs += subkeysNumColumns * lenSKIA
+			totUidArgs += useridsNumColumns * lenUIA
+			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
+				totKeyArgs -= keysNumColumns
+				totSubkeyArgs -= subkeysNumColumns * lenSKIA
+				break
+			}
+			keysValueStrings = append(keysValueStrings,
+				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
+					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
+			insTime := time.Now().UTC()
+			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
+				insTime, insTime, insTime, kd.MD5, kd.Keywords, kd.VFingerprint)
+
+			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
+				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
+				subkeysValueArgs = append(subkeysValueArgs,
+					subkeysDocs[idx][sidx].RFingerprint, subkeysDocs[idx][sidx].RSubKeyFp, subkeysDocs[idx][sidx].VSubKeyFp)
+			}
+			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
+				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
+				uidsValueArgs = append(uidsValueArgs,
+					uidDocs[idx][uidx].RFingerprint, uidDocs[idx][uidx].UidString, uidDocs[idx][uidx].Identity, uidDocs[idx][uidx].Confidence)
+			}
+			kd, pullOk = keyDocsPull()
+		}
+
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+		ok := st.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
+		if !ok {
+			return false
+		}
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+	}
+	return true
+}
+
+func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
+	var keysReindexed int
+	err := st.QueryRow(bulkCopiedKeysNum).Scan(&keysReindexed)
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		log.Warnf("could not update reindex stats: %v", err)
+		keysReindexed = 0
+	}
+	return keysReindexed
+}
+
+func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
+	log.Debugf("attempting bulk update of keys, subkeys, userids")
+	subkeysOK, useridsOK := true, true
+	// subkey batch-processing
+	if _, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
+		return false
+	}
+	// userid batch-processing
+	if _, useridsOK = st.bulkInsertCheckUserIDs(result); !useridsOK {
+		return false
+	}
+
+	// We don't clean up orphans because Reindex doesn't delete keys (unlike Reload)
+	txStrs := []string{bulkTxReindexKeys, bulkTxClearDupSubkeys, bulkTxClearDupUserIDs, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
+	msgStrs := []string{"bulkTx-reindex-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-dup-userids", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
+	err := st.bulkExecSingleTx(txStrs, msgStrs)
+	if err != nil {
+		log.Warnf("could not reindex: %v", err)
+		result.Errors = append(result.Errors, err)
+		return false
+	}
+	return true
+}
+
+func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
+	log.Infof("attempting bulk reindex of %d keys", len(keyDocs))
+	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
+	err := st.bulkCreateTempTables()
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+		return 0, false
+	}
+	defer st.bulkDropTempTables()
+	keysReindexed := 0
+	if !st.bulkReindexDoCopy(maps.Values(keyDocs), result) {
+		return 0, false
+	}
+	if !st.bulkReindexKeys(result) {
+		return 0, false
+	}
+
+	keysReindexed = st.bulkReindexGetStats(result)
+	err = st.bulkDropTempTables()
+	if err != nil {
+		result.Errors = append(result.Errors, err)
+	}
+	return keysReindexed, true
 }
