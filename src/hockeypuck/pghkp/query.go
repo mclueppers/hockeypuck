@@ -461,7 +461,7 @@ func (st *storage) fetchUserIdDocs(rfps []string) ([]*types.UserIdDoc, error) {
 		}
 		rfpIn = append(rfpIn, "'"+strings.ToLower(rfp)+"'")
 	}
-	sqlStr = fmt.Sprintf("SELECT rfingerprint, uidstring, email, confidence FROM userids WHERE rfingerprint IN (%s) ORDER BY confidence DESC, email, uidstring ASC", strings.Join(rfpIn, ","))
+	sqlStr = fmt.Sprintf("SELECT rfingerprint, uidstring, identity, confidence FROM userids WHERE rfingerprint IN (%s) ORDER BY confidence DESC, identity, uidstring ASC", strings.Join(rfpIn, ","))
 	rows, err := st.Query(sqlStr)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -471,7 +471,7 @@ func (st *storage) fetchUserIdDocs(rfps []string) ([]*types.UserIdDoc, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var uidd types.UserIdDoc
-		err = rows.Scan(&uidd.RFingerprint, &uidd.UidString, &uidd.Email, &uidd.Confidence)
+		err = rows.Scan(&uidd.RFingerprint, &uidd.UidString, &uidd.Identity, &uidd.Confidence)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, errors.WithStack(err)
 		}

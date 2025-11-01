@@ -187,11 +187,11 @@ func (s *S) TestTableSchemas(c *gc.C) {
 	c.Assert(uiddocs, gc.HasLen, 2, comment)
 	c.Assert(uiddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
 	c.Assert(uiddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
-	c.Assert(uiddocs[0].Email, gc.Equals, "casey.marshall@canonical.com", comment)
+	c.Assert(uiddocs[0].Identity, gc.Equals, "casey.marshall@canonical.com", comment)
 	c.Assert(uiddocs[0].Confidence, gc.Equals, 0, comment)
 	c.Assert(uiddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
 	c.Assert(uiddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
-	c.Assert(uiddocs[1].Email, gc.Equals, "cmars@cmarstech.com", comment)
+	c.Assert(uiddocs[1].Identity, gc.Equals, "cmars@cmarstech.com", comment)
 	c.Assert(uiddocs[1].Confidence, gc.Equals, 0, comment)
 }
 
@@ -655,7 +655,7 @@ func (s *S) TestBulkInsert(c *gc.C) {
 	c.Assert(newuseriddocs, gc.HasLen, 1, comment)
 	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8"), comment)
 	c.Assert(newuseriddocs[0].UidString, gc.Equals, "testing <example-10101010@example.com>", comment)
-	c.Assert(newuseriddocs[0].Email, gc.Equals, "example-10101010@example.com", comment)
+	c.Assert(newuseriddocs[0].Identity, gc.Equals, "example-10101010@example.com", comment)
 
 	// Check that the key is indexed
 	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=example-10101010@example.com")
@@ -676,9 +676,9 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's subkey"))
 	_, err = s.storage.Exec(`DELETE FROM subkeys WHERE rsubfp = $1`, openpgp.Reverse("6f6d93d0811d1f8b7a34944b782e33de1a96e4c8"))
 	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's subkey"))
-	_, err = s.storage.Exec(`UPDATE userids SET email = '' WHERE email = 'cmars@cmarstech.com'`)
+	_, err = s.storage.Exec(`UPDATE userids SET identity = '' WHERE identity = 'cmars@cmarstech.com'`)
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's userid"))
-	_, err = s.storage.Exec(`DELETE FROM userids WHERE email = 'casey.marshall@canonical.com'`)
+	_, err = s.storage.Exec(`DELETE FROM userids WHERE identity = 'casey.marshall@canonical.com'`)
 	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userid"))
 
 	oldkeydocs, err := s.storage.fetchKeyDocs([]string{openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d")})
@@ -726,9 +726,9 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
 	c.Assert(newuseriddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
 	c.Assert(newuseriddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
-	c.Assert(newuseriddocs[0].Email, gc.Equals, "casey.marshall@canonical.com", comment)
+	c.Assert(newuseriddocs[0].Identity, gc.Equals, "casey.marshall@canonical.com", comment)
 	c.Assert(newuseriddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
-	c.Assert(newuseriddocs[1].Email, gc.Equals, "cmars@cmarstech.com", comment)
+	c.Assert(newuseriddocs[1].Identity, gc.Equals, "cmars@cmarstech.com", comment)
 
 	// Check that Casey's key is indexed again
 	res, err = http.Get(s.srv.URL + "/pks/lookup?op=get&search=casey+marshall")
@@ -780,9 +780,9 @@ func (s *S) setupReload(c *gc.C) (oldkeydocs []*types.KeyDoc) {
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's subkey"))
 	_, err = s.storage.Exec(`DELETE FROM subkeys WHERE rsubfp = $1`, openpgp.Reverse("6f6d93d0811d1f8b7a34944b782e33de1a96e4c8"))
 	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's subkey"))
-	_, err = s.storage.Exec(`UPDATE userids SET email = '' WHERE email = 'cmars@cmarstech.com'`)
+	_, err = s.storage.Exec(`UPDATE userids SET identity = '' WHERE identity = 'cmars@cmarstech.com'`)
 	c.Assert(err, gc.IsNil, gc.Commentf("mangle casey's userid"))
-	_, err = s.storage.Exec(`DELETE FROM userids WHERE email = 'casey.marshall@canonical.com'`)
+	_, err = s.storage.Exec(`DELETE FROM userids WHERE identity = 'casey.marshall@canonical.com'`)
 	c.Assert(err, gc.IsNil, gc.Commentf("delete casey's userid"))
 
 	return oldkeydocs
@@ -817,9 +817,9 @@ func (s *S) checkReload(c *gc.C, oldkeydocs []*types.KeyDoc) {
 	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
 	c.Assert(newuseriddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
 	c.Assert(newuseriddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
-	c.Assert(newuseriddocs[0].Email, gc.Equals, "casey.marshall@canonical.com", comment)
+	c.Assert(newuseriddocs[0].Identity, gc.Equals, "casey.marshall@canonical.com", comment)
 	c.Assert(newuseriddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
-	c.Assert(newuseriddocs[1].Email, gc.Equals, "cmars@cmarstech.com", comment)
+	c.Assert(newuseriddocs[1].Identity, gc.Equals, "cmars@cmarstech.com", comment)
 
 	// Check that Alice's key is still searchable by her encryption subkey fingerprint
 	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0x6A5B700BF3D13863")

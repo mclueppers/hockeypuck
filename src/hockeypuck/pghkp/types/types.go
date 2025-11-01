@@ -59,7 +59,7 @@ type SubKeyDoc struct {
 type UserIdDoc struct {
 	RFingerprint string
 	UidString    string
-	Email        string
+	Identity     string
 	Confidence   int
 }
 
@@ -121,11 +121,14 @@ func keywordsFromTSVector(tsv string) (result []string) {
 	return
 }
 
-// keywordsFromKey returns slices of keyword tokens, email addresses, and UIDs
+// keywordsFromKey returns slices of keyword tokens, identities, and UIDs
 // extracted from the UserID packets of the given key.
 //
 // TODO: shouldn't this be a method on openpgp.PrimaryKey instead?
 // It's not specific to PostgreSQL, or even to storage.
+//
+// TODO: currently this only recognises identities that look like email addresses.
+// We should allow for other forms of identity, such as URLs.
 func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []UserIdDoc) {
 	keywordMap := make(map[string]bool)
 	uiddocs = make([]UserIdDoc, len(key.UserIDs))
@@ -135,22 +138,22 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 		keywordMap[s] = true
 		uiddocs[i].RFingerprint = key.RFingerprint
 		uiddocs[i].UidString = s
-		email := ""
+		identity := ""
 		commentary := s
 		lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
 		if lbr != -1 && rbr > lbr {
-			email = s[lbr+1 : rbr]
+			identity = s[lbr+1 : rbr]
 			commentary = s[:lbr]
 		} else {
-			email = s
+			identity = s
 			commentary = ""
 		}
 		// TODO: this still doesn't recognise all possible forms of UID :confounded:
-		if email != "" {
-			keywordMap[email] = true
-			parts := strings.SplitN(email, "@", 2)
+		if identity != "" {
+			keywordMap[identity] = true
+			parts := strings.SplitN(identity, "@", 2)
 			if len(parts) == 2 {
-				uiddocs[i].Email = email
+				uiddocs[i].Identity = identity
 				keywordMap[parts[0]] = true
 				keywordMap[parts[1]] = true
 			}
@@ -177,20 +180,20 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 	return
 }
 
-// keywordsFromSearch returns slices of keyword tokens and email addresses
+// keywordsFromSearch returns slices of keyword tokens and identities
 // extracted from the supplied search string.
 //
 // TODO: shouldn't this also be generic?
-func keywordsFromSearch(search string) (keywords []string, emails []string) {
+func keywordsFromSearch(search string) (keywords []string, identities []string) {
 	keywordMap := make(map[string]bool)
-	emailMap := make(map[string]bool)
+	identityMap := make(map[string]bool)
 	s := strings.ToLower(search)
-	email := s
+	identity := s
 	lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
 	if lbr != -1 && rbr > lbr {
-		email = s[lbr+1 : rbr]
-		keywordMap[email] = true
-		emailMap[email] = true
+		identity = s[lbr+1 : rbr]
+		keywordMap[identity] = true
+		identityMap[identity] = true
 	} else {
 		for _, field := range strings.FieldsFunc(s, func(r rune) bool {
 			return !utf8.ValidRune(r) || unicode.IsSpace(r) // split on invalid runes and whitespace
@@ -205,11 +208,11 @@ func keywordsFromSearch(search string) (keywords []string, emails []string) {
 		}
 		keywords = append(keywords, k)
 	}
-	for k := range emailMap {
+	for k := range identityMap {
 		if k == "" {
 			continue
 		}
-		emails = append(emails, k)
+		identities = append(identities, k)
 	}
 	return
 }

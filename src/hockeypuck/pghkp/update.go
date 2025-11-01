@@ -112,7 +112,7 @@ func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert 
 	}
 	defer subStmt.Close()
 
-	uidStmt, err := tx.Prepare("INSERT INTO userids (rfingerprint, uidstring, email, confidence) " +
+	uidStmt, err := tx.Prepare("INSERT INTO userids (rfingerprint, uidstring, identity, confidence) " +
 		"SELECT $1::TEXT, $2::TEXT, $3::TEXT, $4::INTEGER WHERE NOT EXISTS (SELECT 1 FROM userids WHERE rfingerprint = $1 and uidstring = $2)")
 	if err != nil {
 		log.Errorf("1 SQL: %q", errors.WithStack(err))
@@ -154,7 +154,7 @@ func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert 
 		}
 	}
 	for _, uid := range uiddocs {
-		_, err := uidStmt.Exec(&key.RFingerprint, &uid.UidString, &uid.Email, &uid.Confidence)
+		_, err := uidStmt.Exec(&key.RFingerprint, &uid.UidString, &uid.Identity, &uid.Confidence)
 		if err != nil {
 			log.Errorf("2 SQL: %q", errors.WithStack(err))
 			return false, errors.Wrapf(err, "cannot insert uid=%q", uid.UidString)
@@ -329,10 +329,10 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 		}
 	}
 	for _, uid := range uiddocs {
-		_, err := tx.Exec("INSERT INTO userids (rfingerprint, uidstring, email, confidence) "+
+		_, err := tx.Exec("INSERT INTO userids (rfingerprint, uidstring, identity, confidence) "+
 			"VALUES ( $1::TEXT, $2::TEXT, $3::TEXT, $4::INTEGER ) "+
-			"ON CONFLICT (rfingerprint, uidstring) DO UPDATE SET email = $3::TEXT, confidence = $4::INTEGER", // gracefully update existing records
-			&uid.RFingerprint, &uid.UidString, &uid.Email, &uid.Confidence)
+			"ON CONFLICT (rfingerprint, uidstring) DO UPDATE SET identity = $3::TEXT, confidence = $4::INTEGER", // gracefully update existing records
+			&uid.RFingerprint, &uid.UidString, &uid.Identity, &uid.Confidence)
 		if err != nil {
 			log.Errorf("3 SQL: %q", errors.WithStack(err))
 			return errors.WithStack(err)

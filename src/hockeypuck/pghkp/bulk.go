@@ -137,8 +137,8 @@ const bulkTxFilterUniqueUserIDs string =
 // Avoid checking "EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = uidcpinA.rfingerprint)"
 // by checking in keys_copyin (despite no indexing): only duplicates (in-file or _in DB_) are
 // still in keys_copyin
-`INSERT INTO userids_checked (rfingerprint, uidstring, email, confidence)
-SELECT rfingerprint, uidstring, email, confidence FROM userids_copyin uidcpinA WHERE
+`INSERT INTO userids_checked (rfingerprint, uidstring, identity, confidence)
+SELECT rfingerprint, uidstring, identity, confidence FROM userids_copyin uidcpinA WHERE
 uidcpinA.rfingerprint IS NOT NULL AND uidcpinA.uidstring IS NOT NULL AND uidcpinA.confidence IS NOT NULL AND
 (SELECT COUNT(*) FROM userids_copyin uidcpinB WHERE uidcpinB.rfingerprint = uidcpinA.rfingerprint AND uidcpinB.uidstring = uidcpinA.uidstring) = 1 AND
 NOT EXISTS (SELECT 1 FROM userids WHERE userids.rfingerprint = uidcpinA.rfingerprint AND userids.uidstring = uidcpinA.uidstring) AND
@@ -165,8 +165,8 @@ const bulkTxFilterDupUserIDs string =
 // *** ctid field is PostgreSQL-specific; Oracle has ROWID equivalent field ***
 // Avoid checking "EXISTS (SELECT 1 FROM keys WHERE keys.rfingerprint = userids_copyin.rfingerprint)"
 // by checking in keys_copyin (despite no indexing): only dups (in-file or _in DB_) still in keys_copyin
-`INSERT INTO userids_checked (rfingerprint, uidstring, email, confidence)
-SELECT rfingerprint, uidstring, email, confidence FROM userids_copyin WHERE
+`INSERT INTO userids_checked (rfingerprint, uidstring, identity, confidence)
+SELECT rfingerprint, uidstring, identity, confidence FROM userids_copyin WHERE
 ctid IN
    (SELECT ctid FROM
       (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY uidstring ORDER BY ctid) uidstringEnum FROM userids_copyin) AS dupRsubfpTAB
@@ -187,8 +187,8 @@ SELECT rfingerprint, rsubfp, vsubfp FROM subkeys_checked
 `
 
 // bulkTxInsertUserIDs is the query for final bulk userid insertion, from a temporary table to the DB.
-const bulkTxInsertUserIDs string = `INSERT INTO userids (rfingerprint, uidstring, email, confidence)
-SELECT rfingerprint, uidstring, email, confidence FROM userids_checked
+const bulkTxInsertUserIDs string = `INSERT INTO userids (rfingerprint, uidstring, identity, confidence)
+SELECT rfingerprint, uidstring, identity, confidence FROM userids_checked
 `
 
 // bulkTxJournalKeys saves the current rows (without json docs) of all the keys about to be updated.
@@ -251,9 +251,9 @@ SET vsubfp = subkeys_copyin.vsubfp FROM subkeys_copyin
 WHERE subkeys.rsubfp = subkeys_copyin.rsubfp
 `
 
-// bulkTxReindexUserIDs is the query for updating the userids table schema to (re)populate the email and confidence columns in existing rows.
+// bulkTxReindexUserIDs is the query for updating the userids table schema to (re)populate the identity and confidence columns in existing rows.
 const bulkTxReindexUserIDs string = `UPDATE userids
-SET email = userids_copyin.email, confidence = userids_copyin.confidence FROM userids_copyin
+SET identity = userids_copyin.identity, confidence = userids_copyin.confidence FROM userids_copyin
 WHERE userids.rfingerprint = userids_copyin.rfingerprint AND userids.uidstring = userids_copyin.uidstring
 `
 
@@ -360,7 +360,7 @@ vsubfp TEXT
 (
 rfingerprint TEXT,
 uidstring TEXT,
-email TEXT,
+identity TEXT,
 confidence INTEGER
 )
 `,
@@ -387,7 +387,7 @@ vsubfp TEXT NOT NULL UNIQUE
 (
 rfingerprint TEXT NOT NULL,
 uidstring TEXT NOT NULL,
-email TEXT,
+identity TEXT,
 confidence INTEGER NOT NULL,
 PRIMARY KEY (rfingerprint, uidstring)
 )
@@ -686,7 +686,7 @@ type subkeyInsertArgs struct {
 type uidInsertArgs struct {
 	RFingerprint *string
 	UidString    *string
-	Email        *string
+	Identity     *string
 	Confidence   *int
 }
 
@@ -727,7 +727,7 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
 				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
 				uidsValueArgs = append(uidsValueArgs,
-					*uidInsArgs[idx][uidx].RFingerprint, *uidInsArgs[idx][uidx].UidString, *uidInsArgs[idx][uidx].Email, *uidInsArgs[idx][uidx].Confidence)
+					*uidInsArgs[idx][uidx].RFingerprint, *uidInsArgs[idx][uidx].UidString, *uidInsArgs[idx][uidx].Identity, *uidInsArgs[idx][uidx].Confidence)
 			}
 		}
 
@@ -764,7 +764,7 @@ func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsVal
 	}
 
 	// Send all userids to in-mem tables to the pg server; *no constraints checked*
-	useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, email, confidence) VALUES %s",
+	useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, identity, confidence) VALUES %s",
 		userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
 	err = st.bulkInsertSendBunchTx(useridstmt, "userids", uidsValueArgs)
 	if err != nil {
@@ -830,7 +830,7 @@ func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result
 		uidInsArgs[i] = make([]uidInsertArgs, 0, len(uids[i]))
 		for uidx = 0; uidx < len(uids[i]); uidx++ {
 			uidInsArgs[i] = uidInsArgs[i][:uidx+1] // re-slice +1
-			uidInsArgs[i][uidx] = uidInsertArgs{&key.RFingerprint, &uids[i][uidx].UidString, &uids[i][uidx].Email, &uids[i][uidx].Confidence}
+			uidInsArgs[i][uidx] = uidInsertArgs{&key.RFingerprint, &uids[i][uidx].UidString, &uids[i][uidx].Identity, &uids[i][uidx].Confidence}
 		}
 		i++
 	}
