@@ -665,20 +665,20 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 		return false
 	}
 
-	// We don't clean up orphans because Reindex doesn't delete keys (unlike Reload)
+	// We don't clean up dups/orphans because Reindex doesn't delete keys (unlike Reload)
 	if log.GetLevel() >= log.DebugLevel {
 		// update each table on disk separately, and fail fast to see which transaction failed
 		// write to the keys table last, so that reindex will retry on the next pass
-		txStrs := []string{bulkTxClearDupSubkeys, bulkTxInsertSubkeys, bulkTxReindexSubkeys}
-		msgStrs := []string{"bulkTx-clear-dup-subkeys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys"}
+		txStrs := []string{bulkTxInsertSubkeys, bulkTxReindexSubkeys}
+		msgStrs := []string{"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys"}
 		err := st.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex subkeys: %v", err)
 			result.Errors = append(result.Errors, err)
 			return false
 		}
-		txStrs = []string{bulkTxClearDupUserIDs, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
-		msgStrs = []string{"bulkTx-clear-dup-userids", "bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
+		txStrs = []string{bulkTxInsertUserIDs, bulkTxReindexUserIDs}
+		msgStrs = []string{"bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
 		err = st.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex userids: %v", err)
@@ -701,8 +701,8 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 			bulkTxReindexKeys,
 		}
 		msgStrs := []string{
-			"bulkTx-clear-dup-subkeys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys",
-			"bulkTx-clear-dup-userids", "bulkTx-insert-userids", "bulk-Tx-reindex-userids",
+			"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys",
+			"bulkTx-insert-userids", "bulk-Tx-reindex-userids",
 			"bulkTx-reindex-keys",
 		}
 		err := st.bulkExecSingleTx(txStrs, msgStrs)
