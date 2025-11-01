@@ -57,7 +57,7 @@ func (s *S) TestBulkInsert(c *gc.C) {
 	c.Assert(err, gc.IsNil, comment)
 	c.Assert(newuseriddocs, gc.HasLen, 1, comment)
 	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("00bc6161d88d85e9ef87c55826707ffc4fb750d8"), comment)
-	c.Assert(newuseriddocs[0].UidString, gc.Equals, "testing <example-10101010@example.com>", comment)
+	c.Assert(newuseriddocs[0].UidString, gc.Equals, "Testing <example-10101010@example.com>", comment)
 	c.Assert(newuseriddocs[0].Identity, gc.Equals, "example-10101010@example.com", comment)
 
 	// Check that the key is indexed

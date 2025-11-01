@@ -83,9 +83,9 @@ func (s *S) TestReindex(c *gc.C) {
 	c.Assert(newuseriddocs, gc.HasLen, 2, comment)
 	c.Assert(newuseriddocs[0].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
 	c.Assert(newuseriddocs[1].RFingerprint, gc.Equals, openpgp.Reverse("8d7c6b1a49166a46ff293af2d4236eabe68e311d"), comment)
-	c.Assert(newuseriddocs[0].UidString, gc.Equals, "casey marshall <casey.marshall@canonical.com>", comment)
+	c.Assert(newuseriddocs[0].UidString, gc.Equals, "Casey Marshall <casey.marshall@canonical.com>", comment)
 	c.Assert(newuseriddocs[0].Identity, gc.Equals, "casey.marshall@canonical.com", comment)
-	c.Assert(newuseriddocs[1].UidString, gc.Equals, "casey marshall <cmars@cmarstech.com>", comment)
+	c.Assert(newuseriddocs[1].UidString, gc.Equals, "Casey Marshall <cmars@cmarstech.com>", comment)
 	c.Assert(newuseriddocs[1].Identity, gc.Equals, "cmars@cmarstech.com", comment)
 
 	// Check that Casey's key is indexed again

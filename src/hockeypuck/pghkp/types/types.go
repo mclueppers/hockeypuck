@@ -133,11 +133,12 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 	keywordMap := make(map[string]bool)
 	uiddocs = make([]UserIdDoc, len(key.UserIDs))
 	for i, uid := range key.UserIDs {
+		// UidString must be unique, so store it case-sensitively
+		uiddocs[i].UidString = uid.Keywords
 		s := strings.ToLower(uid.Keywords)
 		// always include full text of UserID (lowercased)
 		keywordMap[s] = true
 		uiddocs[i].RFingerprint = key.RFingerprint
-		uiddocs[i].UidString = s
 		identity := ""
 		commentary := s
 		lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
