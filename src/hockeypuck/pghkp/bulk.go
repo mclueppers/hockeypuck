@@ -272,10 +272,18 @@ func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSu
 
 	// Batch UPDATE all keys from memory tables (should need no checks!!!!)
 	// Final batch-update in keys/subkeys tables without any checks: _must not_ give any errors
-	txStrs := []string{bulkTxJournalKeys, bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs,
-		bulkTxClearKeys, bulkTxUpdateKeys, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
-	msgStrs := []string{"bulkTx-journal-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
-		"bulkTx-clear-keys", "bulkTx-update-keys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulkTx-reindex-userids"}
+	txStrs := []string{
+		bulkTxJournalKeys,
+		bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs,
+		bulkTxClearKeys, bulkTxUpdateKeys,
+		bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs,
+	}
+	msgStrs := []string{
+		"bulkTx-journal-keys",
+		"bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
+		"bulkTx-clear-keys", "bulkTx-update-keys",
+		"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulkTx-reindex-userids",
+	}
 	err := st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -658,13 +666,51 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 	}
 
 	// We don't clean up orphans because Reindex doesn't delete keys (unlike Reload)
-	txStrs := []string{bulkTxReindexKeys, bulkTxClearDupSubkeys, bulkTxClearDupUserIDs, bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
-	msgStrs := []string{"bulkTx-reindex-keys", "bulkTx-clear-dup-subkeys", "bulkTx-clear-dup-userids", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
-	err := st.bulkExecSingleTx(txStrs, msgStrs)
-	if err != nil {
-		log.Warnf("could not reindex: %v", err)
-		result.Errors = append(result.Errors, err)
-		return false
+	if log.GetLevel() >= log.DebugLevel {
+		// update each table on disk separately, and fail fast to see which transaction failed
+		// write to the keys table last, so that reindex will retry on the next pass
+		txStrs := []string{bulkTxClearDupSubkeys, bulkTxInsertSubkeys, bulkTxReindexSubkeys}
+		msgStrs := []string{"bulkTx-clear-dup-subkeys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys"}
+		err := st.bulkExecSingleTx(txStrs, msgStrs)
+		if err != nil {
+			log.Warnf("could not reindex subkeys: %v", err)
+			result.Errors = append(result.Errors, err)
+			return false
+		}
+		txStrs = []string{bulkTxClearDupUserIDs, bulkTxInsertUserIDs, bulkTxReindexUserIDs}
+		msgStrs = []string{"bulkTx-clear-dup-userids", "bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
+		err = st.bulkExecSingleTx(txStrs, msgStrs)
+		if err != nil {
+			log.Warnf("could not reindex userids: %v", err)
+			result.Errors = append(result.Errors, err)
+			return false
+		}
+		txStrs = []string{bulkTxReindexKeys}
+		msgStrs = []string{"bulkTx-reindex-keys"}
+		err = st.bulkExecSingleTx(txStrs, msgStrs)
+		if err != nil {
+			log.Warnf("could not reindex keys: %v", err)
+			result.Errors = append(result.Errors, err)
+			return false
+		}
+	} else {
+		// update all tables on-disk in a single transaction
+		txStrs := []string{
+			bulkTxClearDupSubkeys, bulkTxInsertSubkeys, bulkTxReindexSubkeys,
+			bulkTxClearDupUserIDs, bulkTxInsertUserIDs, bulkTxReindexUserIDs,
+			bulkTxReindexKeys,
+		}
+		msgStrs := []string{
+			"bulkTx-clear-dup-subkeys", "bulkTx-insert-subkeys", "bulkTx-reindex-subkeys",
+			"bulkTx-clear-dup-userids", "bulkTx-insert-userids", "bulk-Tx-reindex-userids",
+			"bulkTx-reindex-keys",
+		}
+		err := st.bulkExecSingleTx(txStrs, msgStrs)
+		if err != nil {
+			log.Warnf("could not reindex: %v", err)
+			result.Errors = append(result.Errors, err)
+			return false
+		}
 	}
 	return true
 }
