@@ -485,7 +485,7 @@ func (st *storage) bulkUpdateGetStats(result *hkpstorage.InsertError) (keysUpdat
 }
 
 func (st *storage) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error) {
-	log.Debugf("Transaction started: %q", jobDesc)
+	log.Debugf("transaction started: %q", jobDesc)
 	t := time.Now()
 	// In single transaction
 	tx, err := st.Begin()
@@ -512,7 +512,7 @@ func (st *storage) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error)
 			return errors.Wrapf(err, "issuing DB server job %s", jobDesc[i])
 		}
 	}
-	log.Debugf("Transaction finished in %v", time.Since(t))
+	log.Debugf("transaction finished in %v", time.Since(t))
 	return err
 }
 
@@ -642,7 +642,7 @@ func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSu
 }
 
 func (st *storage) bulkInsertSendBunchTx(keystmt, msgSpec string, keysValueArgs []interface{}) (err error) {
-	log.Debugf("Transaction started: %q", msgSpec)
+	log.Debugf("transaction started: %q", msgSpec)
 	t := time.Now()
 	// In single transaction...
 	tx, err := st.Begin()
@@ -666,7 +666,7 @@ func (st *storage) bulkInsertSendBunchTx(keystmt, msgSpec string, keysValueArgs 
 	if err != nil {
 		return errors.Wrapf(err, "cannot simply send a bunch of %s to server (too large bunch?)", msgSpec)
 	}
-	log.Debugf("Transaction finished in %v", time.Since(t))
+	log.Debugf("transaction finished in %v", time.Since(t))
 	return nil
 }
 
