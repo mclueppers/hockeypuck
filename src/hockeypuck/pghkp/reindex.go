@@ -68,7 +68,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*type
 			newKeyDocs[kd.MD5] = kd
 		}
 	}
-	log.Infof("found %d stale records up to %v", len(newKeyDocs), bookmark)
+	log.Debugf("found %d stale records up to %v", len(newKeyDocs), bookmark)
 	return count, false
 }
 
