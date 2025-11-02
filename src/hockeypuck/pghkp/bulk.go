@@ -514,7 +514,7 @@ func (st *storage) bulkCreateTempTables() error {
 // bulkInsert inserts the given keys, and stores any errors in `result`
 // If `oldKeys` is a non-empty list of fingerprints, any keys in it but not in `keys` will be deleted.
 func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError, oldKeys []string) (keysInserted, keysDeleted int, ok bool) {
-	log.Infof("attempting bulk insertion of keys")
+	log.Infof("inserting batch of %d keys", len(keys))
 	t := time.Now() // FIXME: Remove this
 	// Create 2 sets of _temporary_ (in-mem) tables:
 	// (a) keys_copyin, subkeys_copyin, userids_copyin
@@ -657,8 +657,7 @@ func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 	return keysReindexed
 }
 
-func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
-	log.Debugf("attempting bulk update of keys, subkeys, userids")
+func (st *storage) bulkReindexFromCopyinTables(result *hkpstorage.InsertError) bool {
 	subkeysOK, useridsOK := true, true
 	// subkey batch-processing
 	if _, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
@@ -720,7 +719,7 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 }
 
 func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
-	log.Infof("attempting bulk reindex of %d keys", len(keyDocs))
+	log.Infof("reindexing batch of %d keys", len(keyDocs))
 	err := st.bulkCreateTempTables()
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -731,7 +730,7 @@ func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstor
 	if !st.bulkReindexDoCopy(maps.Values(keyDocs), result) {
 		return 0, false
 	}
-	if !st.bulkReindexKeys(result) {
+	if !st.bulkReindexFromCopyinTables(result) {
 		return 0, false
 	}
 
