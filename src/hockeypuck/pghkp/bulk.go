@@ -99,7 +99,7 @@ func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (maxDups, 
 	return
 }
 
-func (st *storage) bulkUpdateGetStats(result *hkpstorage.InsertError) (keysUpdated, subkeysInserted, useridsInserted, keysDeleted int) {
+func (st *storage) bulkReloadGetStats(result *hkpstorage.InsertError) (keysUpdated, subkeysInserted, useridsInserted, keysDeleted int) {
 	// The number of keys copied and the number updated should be the same (TODO: check this!)
 	err := st.QueryRow(bulkCopiedKeysNum).Scan(&keysUpdated)
 	if err != nil {
@@ -228,7 +228,7 @@ func (st *storage) bulkInsertCheckKeys(result *hkpstorage.InsertError) (numNulls
 	return numNulls, true
 }
 
-func (st *storage) bulkInsertCheckedKeysSubkeys(result *hkpstorage.InsertError) (nullKeys, nullSubkeys, nullUserIDs int, ok bool) {
+func (st *storage) bulkInsertFromCopyinTables(result *hkpstorage.InsertError) (nullKeys, nullSubkeys, nullUserIDs int, ok bool) {
 	keysOK, subkeysOK, useridsOK := true, true, true
 	// key batch-processing
 	if nullKeys, keysOK = st.bulkInsertCheckKeys(result); !keysOK {
@@ -256,10 +256,10 @@ func (st *storage) bulkInsertCheckedKeysSubkeys(result *hkpstorage.InsertError) 
 	return nullKeys, nullSubkeys, nullUserIDs, true
 }
 
-// bulkUpdateKeysSubkeys updates a bunch of keys in-place.
-// It is similar to bulkInsertCheckedKeysSubkeys but performs no checks on keys (we assume the DB is already sane)
+// bulkReloadFromCopyinTables updates a bunch of keys in-place.
+// It is similar to bulkInsertFromCopyinTables but performs no checks on keys (we assume the `keys` table is already sane)
 // We still have to check for duplicate subkeys, as these are not stripped from the json docs.
-func (st *storage) bulkUpdateKeysSubkeys(result *hkpstorage.InsertError) (nullSubkeys, nullUserIDs int, ok bool) {
+func (st *storage) bulkReloadFromCopyinTables(result *hkpstorage.InsertError) (nullSubkeys, nullUserIDs int, ok bool) {
 	subkeysOK, useridsOK := true, true
 	// subkey batch-processing
 	if nullSubkeys, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
@@ -533,20 +533,20 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 			return 0, 0, false
 		}
 		// (b): From _copyin tables update existing on-disk records
-		//      check subkey constraints only
-		if subkeysWithNulls, useridsWithNulls, ok = st.bulkUpdateKeysSubkeys(result); !ok {
+		//      remove duplicates, check supplementary table constraints only, not `keys`
+		if subkeysWithNulls, useridsWithNulls, ok = st.bulkReloadFromCopyinTables(result); !ok {
 			return 0, 0, false
 		}
-		keysInserted, subkeysInserted, useridsInserted, keysDeleted = st.bulkUpdateGetStats(result)
+		keysInserted, subkeysInserted, useridsInserted, keysDeleted = st.bulkReloadGetStats(result)
 		err = st.BulkNotify(bulkUpdQueryKeyAdded, bulkUpdQueryKeyRemoved)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not bulk notify insertion/deletion: %v", err)
 		}
 	} else {
-		// (b): From _copyin tables (still only to in-mem table) remove duplicates
-		//      check *all* constraints & RollBack insertions of key/subkeys that err
-		if keysWithNulls, subkeysWithNulls, useridsWithNulls, ok = st.bulkInsertCheckedKeysSubkeys(result); !ok {
+		// (b): From _copyin tables insert new on-disk records
+		//      remove duplicates, check *all* constraints & RollBack insertions that err
+		if keysWithNulls, subkeysWithNulls, useridsWithNulls, ok = st.bulkInsertFromCopyinTables(result); !ok {
 			return 0, 0, false
 		}
 		maxDups, minDups, keysInserted, subkeysInserted, useridsInserted = st.bulkInsertGetStats(result)
@@ -717,7 +717,6 @@ func (st *storage) bulkReindexKeys(result *hkpstorage.InsertError) bool {
 
 func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
 	log.Infof("attempting bulk reindex of %d keys", len(keyDocs))
-	// We only use the `keys_copyin` temp table, but reuse the full complement for simplicity.
 	err := st.bulkCreateTempTables()
 	if err != nil {
 		result.Errors = append(result.Errors, err)
