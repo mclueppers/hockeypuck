@@ -18,6 +18,7 @@
 package pghkp
 
 import (
+	"fmt"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -62,7 +63,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*type
 		}
 		_, _, changed, err := kd.Refresh()
 		if err != nil {
-			result.Errors = append(result.Errors, err)
+			result.Errors = append(result.Errors, fmt.Errorf("rfp=%v: %w", kd.RFingerprint, err))
 		} else if changed {
 			newKeyDocs[kd.MD5] = kd
 		}
