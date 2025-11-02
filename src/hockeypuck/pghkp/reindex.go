@@ -90,7 +90,7 @@ func (st *storage) Reindex() error {
 		t := time.Now()
 		count, finished := st.refreshBunch(&bookmark, newKeyDocs, &result)
 		total += count
-		if finished || len(newKeyDocs) > keysInBunch-100 {
+		if finished && len(newKeyDocs) != 0 || len(newKeyDocs) > keysInBunch-100 {
 			n, bulkOK := st.bulkReindex(newKeyDocs, &result)
 			if !bulkOK {
 				log.Debugf("bulkReindex not ok: %q", result.Errors)
