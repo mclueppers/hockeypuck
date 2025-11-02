@@ -151,9 +151,13 @@ func (st *storage) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error)
 			return errors.Wrapf(err, "preparing DB server job %s", jobDesc[i])
 		}
 		defer bulkTxStmt.Close()
-		_, err = bulkTxStmt.Exec()
+		result, err := bulkTxStmt.Exec()
 		if err != nil {
 			return errors.Wrapf(err, "issuing DB server job %s", jobDesc[i])
+		}
+		ra, err := result.RowsAffected()
+		if err != nil {
+			log.Debugf("%s will affect %d rows", jobDesc[i], ra)
 		}
 	}
 	log.Debugf("transaction finished in %v", time.Since(t))
