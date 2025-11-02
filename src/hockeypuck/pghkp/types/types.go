@@ -332,7 +332,18 @@ func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, change
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
 		log.Debugf("keyword mismatch on fp=%s, was %q now %q", pk.Fingerprint, oldKeywords, newKeywords)
-		kd.Keywords, err = keywordsToTSVector(newKeywords, " ")
+		var err2 error
+		kd.Keywords, err2 = keywordsToTSVector(newKeywords, " ")
+		if err2 != nil {
+			// In this case we've found a key that generated
+			// an invalid tsvector - this is pretty much guaranteed
+			// to be a bogus key, since having a valid key with
+			// user IDs that exceed limits is highly unlikely.
+			// In the future we should catch this earlier and
+			// reject it as a bad key, but when refreshing we
+			// skip, so the batch won't fail in its entirety.
+			log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err2)
+		}
 		changed = true
 	}
 
@@ -345,7 +356,7 @@ func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, change
 	// In future we may add further tasks here.
 	// DO NOT update the md5 field, as this is used by bulkReindex to prevent simultaneous updates.
 
-	return subkeyDocs, uidDocs, changed, err
+	return subkeyDocs, uidDocs, changed, nil
 }
 
 func subkeys(key *openpgp.PrimaryKey) []SubKeyDoc {
