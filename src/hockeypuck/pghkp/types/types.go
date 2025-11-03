@@ -332,8 +332,7 @@ func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, change
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
 		log.Debugf("keyword mismatch on fp=%s, was %q now %q", pk.Fingerprint, oldKeywords, newKeywords)
-		var err2 error
-		kd.Keywords, err2 = keywordsToTSVector(newKeywords, " ")
+		tsv, err2 := keywordsToTSVector(newKeywords, " ")
 		if err2 != nil {
 			// In this case we've found a key that generated
 			// an invalid tsvector - this is pretty much guaranteed
@@ -343,6 +342,8 @@ func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, change
 			// reject it as a bad key, but when refreshing we
 			// skip, so the batch won't fail in its entirety.
 			log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err2)
+		} else {
+			kd.Keywords = tsv
 		}
 		changed = true
 	}
