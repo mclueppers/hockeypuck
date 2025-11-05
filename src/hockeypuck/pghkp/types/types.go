@@ -131,14 +131,20 @@ func keywordsFromTSVector(tsv string) (result []string) {
 // We should allow for other forms of identity, such as URLs.
 func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []UserIdDoc) {
 	keywordMap := make(map[string]bool)
-	uiddocs = make([]UserIdDoc, len(key.UserIDs))
-	for i, uid := range key.UserIDs {
+	uiddocs = make([]UserIdDoc, 0, len(key.UserIDs))
+	for _, uid := range key.UserIDs {
+		if len(uid.Keywords) >= 2048 {
+			// ignore overlong userids, they're abusive
+			log.Warningf("userid packet on fp=%q exceeds limit, ignoring: %v...", key.Fingerprint(), uid.Keywords[:32])
+			continue
+		}
+		uiddoc := UserIdDoc{}
 		// UidString must be unique, so store it case-sensitively
-		uiddocs[i].UidString = uid.Keywords
+		uiddoc.UidString = uid.Keywords
 		s := strings.ToLower(uid.Keywords)
 		// always include full text of UserID (lowercased)
 		keywordMap[s] = true
-		uiddocs[i].RFingerprint = key.RFingerprint
+		uiddoc.RFingerprint = key.RFingerprint
 		identity := ""
 		commentary := s
 		lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
@@ -154,7 +160,7 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 			keywordMap[identity] = true
 			parts := strings.SplitN(identity, "@", 2)
 			if len(parts) == 2 {
-				uiddocs[i].Identity = identity
+				uiddoc.Identity = identity
 				keywordMap[parts[0]] = true
 				keywordMap[parts[1]] = true
 			}
@@ -170,6 +176,7 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 				}
 			}
 		}
+		uiddocs = append(uiddocs, uiddoc)
 	}
 	for k := range keywordMap {
 		// discard empty strings, low ASCII symbols, single digits, stop words
