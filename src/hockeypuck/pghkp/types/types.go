@@ -36,6 +36,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// PostgreSQL size limits
+const (
+	lexemeLimit   = 2046    // 2KB - 2B for single lexeme
+	tsvectorLimit = 1048576 // 1MB for lexemes + positions
+)
+
 // KeyDoc is a nearly-raw copy of a row in the PostgreSQL `keys` table.
 type KeyDoc struct {
 	RFingerprint string
@@ -133,9 +139,9 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 	keywordMap := make(map[string]bool)
 	uiddocs = make([]UserIdDoc, 0, len(key.UserIDs))
 	for _, uid := range key.UserIDs {
-		if len(uid.Keywords) >= 2048 {
+		if l := len(uid.Keywords); l >= lexemeLimit {
 			// ignore overlong userids, they're abusive
-			log.Warningf("userid packet on fp=%q exceeds limit, ignoring: %v...", key.Fingerprint(), uid.Keywords[:32])
+			log.Warningf("userid packet on fp=%q exceeds limit (%d >= %d), ignoring: %v...", key.Fingerprint(), l, lexemeLimit, uid.Keywords[:32])
 			continue
 		}
 		uiddoc := UserIdDoc{}
@@ -236,7 +242,7 @@ func KeywordsTSVector(key *openpgp.PrimaryKey) (string, []UserIdDoc) {
 		// In the future we should catch this earlier and
 		// reject it as a bad key, but for now we just skip
 		// storing keyword information.
-		log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err)
+		log.Warningf("ignoring keywords for fp=%q: %v", key.Fingerprint(), err)
 		return "", nil
 	}
 	return tsv, uiddocs
@@ -292,21 +298,17 @@ func desanitiseFromTSVector(s string) string {
 // `sep` SHOULD be either " " or "&". If "&", the output
 // string is a tsquery rather than a tsvector.
 func keywordsToTSVector(keywords []string, sep string) (string, error) {
-	const (
-		lexemeLimit   = 2048            // 2KB for single lexeme
-		tsvectorLimit = 1 * 1024 * 1024 // 1MB for lexemes + positions
-	)
 	newKeywords := []string{}
 	for _, k := range keywords {
 		if l := len(k); l >= lexemeLimit {
-			return "", fmt.Errorf("keyword exceeds limit (%d >= %d)", l, lexemeLimit)
+			return "", fmt.Errorf("keyword exceeds lexeme limit (%d >= %d)", l, lexemeLimit)
 		}
 		newKeywords = append(newKeywords, fmt.Sprintf("'%s'", sanitiseForTSVector(k)))
 	}
 	tsv := strings.Join(newKeywords, sep)
 
 	if l := len(tsv); l >= tsvectorLimit {
-		return "", fmt.Errorf("keywords exceeds limit (%d >= %d)", l, tsvectorLimit)
+		return "", fmt.Errorf("keywords exceed TSVector limit (%d >= %d)", l, tsvectorLimit)
 	}
 	return tsv, nil
 }
@@ -348,7 +350,7 @@ func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, change
 			// In the future we should catch this earlier and
 			// reject it as a bad key, but when refreshing we
 			// skip, so the batch won't fail in its entirety.
-			log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err2)
+			log.Warningf("ignoring keywords on fp=%q: %v", pk.Fingerprint, err2)
 		} else {
 			kd.Keywords = tsv
 		}
