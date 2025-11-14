@@ -451,7 +451,7 @@ func (s *Server) Start() error {
 	}
 
 	if s.settings.OpenPGP.DB.ReindexOnStartup {
-		s.st.StartReindex(s.settings.OpenPGP.DB.ReindexGraceSecs)
+		s.st.StartReindex(s.settings.OpenPGP.DB.ReindexDelaySecs, s.settings.OpenPGP.DB.ReindexIntervalSecs)
 	}
 
 	return nil
