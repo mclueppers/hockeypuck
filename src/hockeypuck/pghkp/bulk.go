@@ -409,25 +409,30 @@ func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsVal
 		return false
 	}
 
-	// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
-	subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp, vsubfp) VALUES %s",
-		subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
-	err = st.bulkInsertSendBunchTx(subkeystmt, "INSERT INTO "+subkeys_copyin_temp_table_name, subkeysValueArgs)
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-		log.Warnf("could not send subkey bunch: %v", err)
-		return false
+	if len(subkeysValueArgs) > 0 {
+		// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
+		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp, vsubfp) VALUES %s",
+			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
+		err = st.bulkInsertSendBunchTx(subkeystmt, "INSERT INTO "+subkeys_copyin_temp_table_name, subkeysValueArgs)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			log.Warnf("could not send subkey bunch: %v", err)
+			return false
+		}
 	}
 
-	// Send all userids to in-mem tables to the pg server; *no constraints checked*
-	useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, identity, confidence) VALUES %s",
-		userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
-	err = st.bulkInsertSendBunchTx(useridstmt, "INSERT INTO "+userids_copyin_temp_table_name, uidsValueArgs)
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-		log.Warnf("could not send userid bunch: %v", err)
-		return false
+	if len(uidsValueArgs) > 0 {
+		// Send all userids to in-mem tables to the pg server; *no constraints checked*
+		useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, identity, confidence) VALUES %s",
+			userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
+		err = st.bulkInsertSendBunchTx(useridstmt, "INSERT INTO "+userids_copyin_temp_table_name, uidsValueArgs)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			log.Warnf("could not send userid bunch: %v", err)
+			return false
+		}
 	}
+
 	return true
 }
 

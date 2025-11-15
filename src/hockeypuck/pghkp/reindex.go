@@ -72,7 +72,7 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*type
 	return count, false
 }
 
-// Reindex is a goroutine that reindexes the keydb in-place, oldest-modified items first.
+// Reindex scans and reindexes the keydb in-place, oldest-modified items first.
 // It does not update CTime, MTime, MD5 or Doc, and does not call Notify.
 // It always returns nil, as reindex failure is not fatal.
 func (st *storage) Reindex() error {
@@ -111,8 +111,27 @@ func (st *storage) Reindex() error {
 }
 
 // Start reindexing in the background. This should only be done after server startup, not during load or dump.
-func (st *storage) StartReindex(reindexGraceSecs int) {
-	if st.oldestIdxTime().Add(time.Second * time.Duration(reindexGraceSecs)).Before(time.Now()) {
-		st.t.Go(st.Reindex)
-	}
+// reindexDelaySecs is the interval after startup before a freshly-started server will attempt its first reindex.
+// This is a safety feature to prevent excessive reindexing when a server restarts multiple times in succession.
+// reindexIntervalSecs is the interval between *subsequent* reindexing runs; a negative value means to reindex only once per startup.
+func (st *storage) StartReindex(reindexDelaySecs, reindexIntervalSecs int) {
+	st.t.Go(func() error {
+		reindexInterval := time.Second * time.Duration(reindexIntervalSecs)
+		reindexDelay := time.Second * time.Duration(reindexDelaySecs)
+		timer := time.NewTimer(reindexDelay)
+		for {
+			select {
+			case <-st.t.Dying():
+				return nil
+			case <-timer.C:
+				st.Reindex()
+				// a negative interval means "run only once"
+				if reindexIntervalSecs < 0 {
+					return nil
+				}
+				log.Infof("waiting %s for next reindex attempt", reindexInterval)
+				timer.Reset(reindexInterval)
+			}
+		}
+	})
 }

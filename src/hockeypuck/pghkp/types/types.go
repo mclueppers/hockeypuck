@@ -351,10 +351,15 @@ func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, change
 			// reject it as a bad key, but when refreshing we
 			// skip, so the batch won't fail in its entirety.
 			log.Warningf("ignoring keywords on fp=%q: %v", pk.Fingerprint, err2)
+			if kd.Keywords != "" {
+				// Clear existing keywords IFF they were non-empty
+				kd.Keywords = ""
+				changed = true
+			}
 		} else {
 			kd.Keywords = tsv
+			changed = true
 		}
-		changed = true
 	}
 
 	// Update to post-2.3 keyDoc schema

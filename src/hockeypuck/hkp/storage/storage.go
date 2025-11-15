@@ -345,7 +345,7 @@ func DeleteKey(storage Storage, fp string) (KeyChange, error) {
 
 type Reindexer interface {
 	// Reindex is a goroutine that reindexes the keydb in-place, oldest-modified items first.
-	StartReindex(reindexGraceSecs int)
+	StartReindex(reindexDelaySecs, reindexIntervalSecs int)
 }
 
 type Reloader interface {
