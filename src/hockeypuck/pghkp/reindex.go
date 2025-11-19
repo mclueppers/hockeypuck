@@ -80,6 +80,7 @@ func (st *storage) Reindex() error {
 	newKeyDocs := make(map[string]*types.KeyDoc, keysInBunch)
 	result := hkpstorage.InsertError{}
 	total := 0
+	log.Infof("reindexing scan starting...")
 
 	for {
 		select {
