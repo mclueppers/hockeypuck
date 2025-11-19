@@ -4,7 +4,7 @@ set -euo pipefail
 
 CONFIG=$SNAP_COMMON/config
 if [ ! -e "$CONFIG" ]; then
-	cp $SNAP/default-config $CONFIG
+	cp $SNAP/sample-template.conf $CONFIG
 	[ -d "$SNAP_COMMON/log" ] || mkdir -p $SNAP_COMMON/log
 	[ -d "$SNAP_COMMON/www" ] || cp -r $SNAP/www $SNAP_COMMON/www
 fi
