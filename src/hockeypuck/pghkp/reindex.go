@@ -80,6 +80,7 @@ func (st *storage) Reindex() error {
 	newKeyDocs := make(map[string]*types.KeyDoc, keysInBunch)
 	result := hkpstorage.InsertError{}
 	total := 0
+	retries, maxRetries := 0, 1
 	log.Infof("reindexing scan starting...")
 
 	for {
@@ -90,6 +91,7 @@ func (st *storage) Reindex() error {
 		}
 
 		t := time.Now()
+		savedBookmark := bookmark
 		count, finished := st.refreshBunch(&bookmark, newKeyDocs, &result)
 		total += count
 		if finished && len(newKeyDocs) != 0 || len(newKeyDocs) > keysInBunch-100 {
@@ -100,9 +102,16 @@ func (st *storage) Reindex() error {
 					log.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
 					return nil
 				}
+				if retries < maxRetries {
+					retries++
+					log.Debugf("retrying reindex batch... %d attempts remaining", maxRetries-retries)
+					bookmark = savedBookmark
+					continue
+				}
 			}
 			log.Infof("%d keys reindexed in %v; total scanned %d", n, time.Since(t), total)
 			newKeyDocs = make(map[string]*types.KeyDoc, keysInBunch)
+			retries = 0
 		}
 		if finished {
 			log.Infof("reindexing complete")
