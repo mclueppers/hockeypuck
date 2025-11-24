@@ -294,11 +294,19 @@ const bulkUpdQueryKeyAdded string = `SELECT md5 FROM keys_copyin WHERE md5 NOT I
 const bulkUpdQueryKeyRemoved string = `SELECT md5 FROM keys_checked WHERE md5 NOT IN (SELECT md5 from keys_copyin)
 `
 
-const bulkTxCleanFilteredKeys string = `TRUNCATE keys_checked
+const bulkTxCleanCopyinKeys string = `TRUNCATE keys_copyin
 `
-const bulkTxCleanFilteredSubkeys string = `TRUNCATE subkeys_checked
+const bulkTxCleanCopyinSubkeys string = `TRUNCATE subkeys_copyin
 `
-const bulkTxCleanFilteredUserIds string = `TRUNCATE userids_checked
+const bulkTxCleanCopyinUserIds string = `TRUNCATE userids_copyin
+`
+const bulkTxCleanCheckedKeys string = `TRUNCATE keys_checked
+`
+const bulkTxCleanCheckedSubkeys string = `TRUNCATE subkeys_checked
+`
+const bulkTxCleanCheckedUserIds string = `TRUNCATE userids_checked
+`
+const bulkTxCleanOldKeys string = `TRUNCATE keys_old
 `
 
 const keys_copyin_temp_table_name string = "keys_copyin"

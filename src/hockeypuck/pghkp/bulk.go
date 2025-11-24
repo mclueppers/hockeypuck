@@ -178,8 +178,8 @@ func (st *storage) bulkInsertCheckSubkeys(result *hkpstorage.InsertError) (numNu
 	// (2) Keep only subkeys with Duplicates in subkeys_copyin:
 	//     Delete 1st-stage checked subkeys above & those with NULL fields
 	// (3) Single-copy of in-file Dups but not in-DB Dups
-	txStrs := []string{bulkTxCleanFilteredSubkeys, bulkTxFilterUniqueSubkeys, bulkTxPrepSubkeyStats, bulkTxFilterDupSubkeys}
-	msgStrs := []string{"bulkTx-clean-filtered-subkeys", "bulkTx-filter-unique-subkeys", "bulkTx-prep-subkeys-stats", "bulkTx-filter-dup-subkeys"}
+	txStrs := []string{bulkTxCleanCheckedSubkeys, bulkTxFilterUniqueSubkeys, bulkTxPrepSubkeyStats, bulkTxFilterDupSubkeys}
+	msgStrs := []string{"bulkTx-clean-checked-subkeys", "bulkTx-filter-unique-subkeys", "bulkTx-prep-subkeys-stats", "bulkTx-filter-dup-subkeys"}
 	err = st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -202,8 +202,8 @@ func (st *storage) bulkInsertCheckUserIDs(result *hkpstorage.InsertError) (numNu
 	// (2) Keep only userids with Duplicates in userids_copyin:
 	//     Delete 1st-stage checked userids above & those with NULL fields
 	// (3) Single-copy of in-file Dups but not in-DB Dups
-	txStrs := []string{bulkTxCleanFilteredUserIds, bulkTxFilterUniqueUserIDs, bulkTxPrepUserIDStats, bulkTxFilterDupUserIDs}
-	msgStrs := []string{"bulkTx-clean-filtered-userids", "bulkTx-filter-unique-userids", "bulkTx-prep-userids-stats", "bulkTx-filter-dup-userids"}
+	txStrs := []string{bulkTxCleanCheckedUserIds, bulkTxFilterUniqueUserIDs, bulkTxPrepUserIDStats, bulkTxFilterDupUserIDs}
+	msgStrs := []string{"bulkTx-clean-checked-userids", "bulkTx-filter-unique-userids", "bulkTx-prep-userids-stats", "bulkTx-filter-dup-userids"}
 	err = st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -225,8 +225,8 @@ func (st *storage) bulkInsertCheckKeys(result *hkpstorage.InsertError) (numNulls
 	// (1) rfingerprint & md5 are also UNIQUE in keys_checked so no duplicates inside this same file allowed
 	// (2) Keep only keys with Duplicates in keys_copyin: delete 1st-stage checked keys & tuples with NULL fields
 	// (3) Insert single copy of in-file Duplicates, if they have no Duplicate in final keys table (in DB)
-	txStrs := []string{bulkTxCleanFilteredKeys, bulkTxFilterUniqueKeys, bulkTxPrepKeyStats, bulkTxFilterDupKeys}
-	msgStrs := []string{"bulkTx-clean-filtered-keys", "bulkTx-filter-unique-keys", "bulkTx-prep-key-stats", "bulkTx-filter-dup-keys"}
+	txStrs := []string{bulkTxCleanCheckedKeys, bulkTxFilterUniqueKeys, bulkTxPrepKeyStats, bulkTxFilterDupKeys}
+	msgStrs := []string{"bulkTx-clean-checked-keys", "bulkTx-filter-unique-keys", "bulkTx-prep-key-stats", "bulkTx-filter-dup-keys"}
 	err = st.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -281,15 +281,13 @@ func (st *storage) bulkReloadFromCopyinTables(result *hkpstorage.InsertError) (n
 	// Batch UPDATE all keys from memory tables (should need no checks!!!!)
 	// Final batch-update in keys/subkeys tables without any checks: _must not_ give any errors
 	txStrs := []string{
-		bulkTxCleanFilteredKeys, bulkTxCleanFilteredSubkeys, bulkTxCleanFilteredUserIds,
-		bulkTxJournalKeys,
+		bulkTxCleanCheckedKeys, bulkTxJournalKeys,
 		bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs,
 		bulkTxClearKeys, bulkTxUpdateKeys,
 		bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs,
 	}
 	msgStrs := []string{
-		"bulkTx-clean-filtered-keys", "bulkTx-clean-filtered-subkeys", "bulkTx-clean-filtered-userids",
-		"bulkTx-journal-keys",
+		"bulkTx-clean-checked-keys", "bulkTx-journal-keys",
 		"bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
 		"bulkTx-clear-keys", "bulkTx-update-keys",
 		"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulkTx-reindex-userids",
@@ -410,10 +408,9 @@ func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]
 // Copyin tables are TRUNCATEd inside the transaction instead of DROPping them between transactions, which is racy
 func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings []string, keysValueArgs, subkeysValueArgs, uidsValueArgs []any, result *hkpstorage.InsertError) (ok bool) {
 	// Send all keys to in-mem tables to the pg server; *no constraints checked*
-	keytruncstmt := fmt.Sprintf("TRUNCATE %s", keys_copyin_temp_table_name)
 	keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint) VALUES %s",
 		keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
-	err := st.bulkInsertSendBunchTx([]string{keytruncstmt, keystmt},
+	err := st.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinKeys, keystmt},
 		"INSERT INTO "+keys_copyin_temp_table_name,
 		[][]any{{}, keysValueArgs})
 	if err != nil {
@@ -424,10 +421,9 @@ func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsVal
 
 	if len(subkeysValueArgs) > 0 {
 		// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
-		subkeytruncstmt := fmt.Sprintf("TRUNCATE %s", subkeys_copyin_temp_table_name)
 		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp, vsubfp) VALUES %s",
 			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
-		err = st.bulkInsertSendBunchTx([]string{subkeytruncstmt, subkeystmt},
+		err = st.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinSubkeys, subkeystmt},
 			"INSERT INTO "+subkeys_copyin_temp_table_name,
 			[][]any{{}, subkeysValueArgs})
 		if err != nil {
@@ -439,10 +435,9 @@ func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsVal
 
 	if len(uidsValueArgs) > 0 {
 		// Send all userids to in-mem tables to the pg server; *no constraints checked*
-		useridtruncstmt := fmt.Sprintf("TRUNCATE %s", userids_copyin_temp_table_name)
 		useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, identity, confidence) VALUES %s",
 			userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
-		err = st.bulkInsertSendBunchTx([]string{useridtruncstmt, useridstmt},
+		err = st.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinUserIds, useridstmt},
 			"INSERT INTO "+userids_copyin_temp_table_name,
 			[][]any{{}, uidsValueArgs})
 		if err != nil {
@@ -465,10 +460,9 @@ func (st *storage) bulkInsertCopyOld(oldKeys []string, result *hkpstorage.Insert
 
 	log.Debugf("uploading %d old fps", len(oldKeys))
 
-	keytruncstmt := fmt.Sprintf("TRUNCATE %s", keys_old_temp_table_name)
 	keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint) VALUES %s",
 		keys_old_temp_table_name, strings.Join(keysValueStrings, ","))
-	err := st.bulkInsertSendBunchTx([]string{keytruncstmt, keystmt},
+	err := st.bulkInsertSendBunchTx([]string{bulkTxCleanOldKeys, keystmt},
 		"INSERT INTO "+keys_old_temp_table_name,
 		[][]any{{}, keysValueArgs})
 	if err != nil {
