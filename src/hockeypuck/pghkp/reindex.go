@@ -120,6 +120,7 @@ func (st *storage) Reindex() error {
 			}
 			try = 1
 			total += subTotal
+			subTotal = 0
 			newKeyDocs = make(map[string]*types.KeyDoc, keysInBunch)
 			savedBookmark = bookmark
 			log.Infof("%d keys reindexed in %v on try %d; total scanned %d", n, time.Since(t), try, total)
