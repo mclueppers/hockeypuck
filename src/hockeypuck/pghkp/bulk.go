@@ -515,6 +515,7 @@ func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result
 	return unprocessed, ok
 }
 
+// bulkDrepTempTables cleans up the temporary (in-mem) tables for bulk actions.
 func (st *storage) bulkDropTempTables() error {
 	// Drop the 2 pairs (all) of temporary tables
 	err := st.bulkExecSingleTx(drTempTablesSQL, []string{"dr-temp-tables"})
@@ -524,6 +525,8 @@ func (st *storage) bulkDropTempTables() error {
 	return nil
 }
 
+// bulkCreateTempTables creates the necessary _temporary_ (in-mem) tables for bulk actions.
+// On success, the calling routine MUST immediately defer bulkDropTempTables.
 func (st *storage) bulkCreateTempTables() error {
 	err := st.bulkExecSingleTx(crTempTablesSQL, []string{"cr-temp-tables"})
 	if err != nil {
@@ -534,20 +537,11 @@ func (st *storage) bulkCreateTempTables() error {
 
 // bulkInsert inserts the given keys, and stores any errors in `result`
 // If `oldKeys` is a non-empty list of fingerprints, any keys in it but not in `keys` will be deleted.
+// The caller MUST invoke bulkCreateTempTables and defer bulkDropTempTables
+// (preferably outside the batch-handling loop) BEFORE calling bulkInsert.
 func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError, oldKeys []string) (keysInserted, keysDeleted int, ok bool) {
 	log.Infof("inserting batch of %d keys", len(keys))
 	t := time.Now() // FIXME: Remove this
-	// Create 2 sets of _temporary_ (in-mem) tables:
-	// (a) keys_copyin, subkeys_copyin, userids_copyin
-	// (b) keys_checked, subkeys_checked, userids_checked
-	err := st.bulkCreateTempTables()
-	if err != nil {
-		// This should always be possible (maybe, out-of-memory?)
-		result.Errors = append(result.Errors, err)
-		log.Warnf("could not create temp tables: %v", err)
-		return 0, 0, false
-	}
-	defer st.bulkDropTempTables()
 	var keysWithNulls, subkeysWithNulls, useridsWithNulls, maxDups, minDups, subkeysInserted, useridsInserted int
 	// (a): Send *all* keys to in-mem tables on the pg server; *no constraints checked*
 	if _, ok = st.bulkInsertCopyKeysToServer(keys, result); !ok {
@@ -563,7 +557,7 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 			return 0, 0, false
 		}
 		keysInserted, subkeysInserted, useridsInserted, keysDeleted = st.bulkReloadGetStats(result)
-		err = st.BulkNotify(bulkUpdQueryKeyAdded, bulkUpdQueryKeyRemoved)
+		err := st.BulkNotify(bulkUpdQueryKeyAdded, bulkUpdQueryKeyRemoved)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not bulk notify insertion/deletion: %v", err)
@@ -575,7 +569,7 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 			return 0, 0, false
 		}
 		maxDups, minDups, keysInserted, subkeysInserted, useridsInserted = st.bulkInsertGetStats(result)
-		err = st.BulkNotify(bulkInsQueryKeyChange)
+		err := st.BulkNotify(bulkInsQueryKeyChange)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not bulk notify insertion: %v", err)
@@ -731,14 +725,11 @@ func (st *storage) bulkReindexFromCopyinTables(result *hkpstorage.InsertError) b
 	return true
 }
 
+// bulkReindex reindexes a batch of keys in a small number of transactions.
+// The caller MUST invoke bulkCreateTempTables and defer bulkDropTempTables
+// (preferably outside the batch-handling loop) BEFORE calling bulkReindex.
 func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
 	log.Infof("reindexing batch of %d keys", len(keyDocs))
-	err := st.bulkCreateTempTables()
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-		return 0, false
-	}
-	defer st.bulkDropTempTables()
 	keysReindexed := 0
 	if !st.bulkReindexDoCopy(maps.Values(keyDocs), result) {
 		return 0, false

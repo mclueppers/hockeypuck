@@ -84,6 +84,13 @@ func (st *storage) Reindex() error {
 	try, maxTries := 1, 2
 	log.Infof("reindexing scan starting...")
 
+	err := st.bulkCreateTempTables()
+	if err != nil {
+		log.Warnf("could not create temp tables: %v", err)
+		return err
+	}
+	defer st.bulkDropTempTables()
+
 	for {
 		select {
 		case <-st.t.Dying():

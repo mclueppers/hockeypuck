@@ -137,6 +137,13 @@ func (st *storage) Reload() (totalUpdated, totalDeleted int, _ error) {
 	newRecords := make([]*hkpstorage.Record, 0, keysInBunch)
 	result := hkpstorage.InsertError{}
 
+	err := st.bulkCreateTempTables()
+	if err != nil {
+		log.Errorf("could not create temp tables: %v", err)
+		return 0, 0, err
+	}
+	defer st.bulkDropTempTables()
+
 	for {
 		t := time.Now()
 		_, finished := st.getReloadBunch(&bookmark, &newRecords, &result)

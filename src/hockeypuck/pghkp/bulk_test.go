@@ -34,6 +34,9 @@ func (s *S) TestBulkInsert(c *gc.C) {
 	keys, err := kr.Read()
 	c.Assert(err, gc.IsNil)
 	var result hkpstorage.InsertError
+	err = s.storage.bulkCreateTempTables()
+	c.Assert(err, gc.IsNil)
+	defer s.storage.bulkDropTempTables()
 	n, _, ok := s.storage.bulkInsert(keys, &result, []string{})
 	c.Assert(ok, gc.Equals, true)
 	c.Assert(n, gc.Equals, 2592)
