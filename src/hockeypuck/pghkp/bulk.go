@@ -379,9 +379,10 @@ func (bs *bulkSession) bulkInsertDoCopy(keyDocs []types.KeyDoc, subKeyDocs [][]t
 			totKeyArgs += keysNumColumns
 			totSubkeyArgs += subkeysNumColumns * lenSKIA
 			totUidArgs += useridsNumColumns * lenUIA
-			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
+			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) || (totUidArgs > uidsInBunch*useridsNumColumns) {
 				totKeyArgs -= keysNumColumns
 				totSubkeyArgs -= subkeysNumColumns * lenSKIA
+				totUidArgs -= useridsNumColumns * lenUIA
 				break
 			}
 			keysValueStrings = append(keysValueStrings,
@@ -635,9 +636,10 @@ func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result
 			totKeyArgs += keysNumColumns
 			totSubkeyArgs += subkeysNumColumns * lenSKIA
 			totUidArgs += useridsNumColumns * lenUIA
-			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
+			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) || (totUidArgs > uidsInBunch*useridsNumColumns) {
 				totKeyArgs -= keysNumColumns
 				totSubkeyArgs -= subkeysNumColumns * lenSKIA
+				totUidArgs -= useridsNumColumns * lenUIA
 				break
 			}
 			keysValueStrings = append(keysValueStrings,
