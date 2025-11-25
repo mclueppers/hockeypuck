@@ -365,19 +365,19 @@ func (bs *bulkSession) bulkInsertSendBunchTx(keystmts []string, msgSpec string, 
 // Insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
 func (bs *bulkSession) bulkInsertDoCopy(keyDocs []types.KeyDoc, subKeyDocs [][]types.SubKeyDoc, uidDocs [][]types.UserIdDoc, result *hkpstorage.InsertError) (ok bool) {
 	lenKIA := len(keyDocs)
-	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
+	for idx := 0; idx < lenKIA; {
 		bunch := newSqlBunch()
 		for ; idx < lenKIA; idx = idx + 1 {
 			if !bunch.append(&keyDocs[idx], subKeyDocs[idx], uidDocs[idx]) {
 				break
 			}
 		}
-		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", bunch.i, bunch.j, bunch.k)
 		ok := bs.bulkInsertSend(bunch, result)
 		if !ok {
 			return false
 		}
-		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", bunch.i, bunch.j, bunch.k)
 	}
 	return true
 }
@@ -650,7 +650,7 @@ func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result
 	defer keyDocsPullStop()
 	pullOk := true
 	var kd *types.KeyDoc
-	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
+	for idx := 0; pullOk; {
 		bunch := newSqlBunch()
 		subKeyDocs := make([][]types.SubKeyDoc, uidsInBunch)
 		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
@@ -666,12 +666,12 @@ func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result
 			}
 			kd, pullOk = keyDocsPull()
 		}
-		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", bunch.i, bunch.j, bunch.k)
 		ok := bs.bulkInsertSend(bunch, result)
 		if !ok {
 			return false
 		}
-		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", bunch.i, bunch.j, bunch.k)
 	}
 	return true
 }
