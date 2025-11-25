@@ -366,76 +366,112 @@ func (bs *bulkSession) bulkInsertSendBunchTx(keystmts []string, msgSpec string, 
 func (bs *bulkSession) bulkInsertDoCopy(keyDocs []types.KeyDoc, subKeyDocs [][]types.SubKeyDoc, uidDocs [][]types.UserIdDoc, result *hkpstorage.InsertError) (ok bool) {
 	lenKIA := len(keyDocs)
 	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
-		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
-		keysValueStrings := make([]string, 0, keysInBunch)
-		keysValueArgs := make([]any, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
-		subkeysValueStrings := make([]string, 0, subkeysInBunch)
-		subkeysValueArgs := make([]any, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
-		uidsValueStrings := make([]string, 0, uidsInBunch)
-		uidsValueArgs := make([]any, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
-		for i, j, k := 0, 0, 0; idx < lenKIA; idx, i = idx+1, i+1 {
-			lenSKIA := len(subKeyDocs[idx])
-			lenUIA := len(uidDocs[idx])
-			totKeyArgs += keysNumColumns
-			totSubkeyArgs += subkeysNumColumns * lenSKIA
-			totUidArgs += useridsNumColumns * lenUIA
-			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) || (totUidArgs > uidsInBunch*useridsNumColumns) {
-				totKeyArgs -= keysNumColumns
-				totSubkeyArgs -= subkeysNumColumns * lenSKIA
-				totUidArgs -= useridsNumColumns * lenUIA
+		bunch := newSqlBunch()
+		for ; idx < lenKIA; idx = idx + 1 {
+			if !bunch.append(&keyDocs[idx], subKeyDocs[idx], uidDocs[idx]) {
 				break
 			}
-			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
-					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
-			insTime := time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, keyDocs[idx].RFingerprint, keyDocs[idx].Doc,
-				insTime, insTime, insTime, keyDocs[idx].MD5, keyDocs[idx].Keywords, keyDocs[idx].VFingerprint)
-
-			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
-				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
-				subkeysValueArgs = append(subkeysValueArgs,
-					subKeyDocs[idx][sidx].RFingerprint, subKeyDocs[idx][sidx].RSubKeyFp, subKeyDocs[idx][sidx].VSubKeyFp)
-			}
-			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
-				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
-				uidsValueArgs = append(uidsValueArgs,
-					uidDocs[idx][uidx].RFingerprint, uidDocs[idx][uidx].UidString, uidDocs[idx][uidx].Identity, uidDocs[idx][uidx].Confidence)
-			}
 		}
-
-		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
-		ok := bs.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
+		ok := bs.bulkInsertSend(bunch, result)
 		if !ok {
 			return false
 		}
-		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
+	}
+	return true
+}
+
+// A bunch of SQL arguments, together with the internal state required by sqlBunch.append()
+type sqlBunch struct {
+	keysValueStrings    []string
+	subkeysValueStrings []string
+	uidsValueStrings    []string
+	keysValueArgs       []any
+	subkeysValueArgs    []any
+	uidsValueArgs       []any
+	totKeyArgs          int
+	totSubkeyArgs       int
+	totUidArgs          int
+	i                   int
+	j                   int
+	k                   int
+}
+
+func newSqlBunch() *sqlBunch {
+	keysValueStrings := make([]string, 0, keysInBunch)
+	keysValueArgs := make([]any, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
+	subkeysValueStrings := make([]string, 0, subkeysInBunch)
+	subkeysValueArgs := make([]any, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
+	uidsValueStrings := make([]string, 0, uidsInBunch)
+	uidsValueArgs := make([]any, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
+	return &sqlBunch{
+		keysValueStrings:    keysValueStrings,
+		keysValueArgs:       keysValueArgs,
+		subkeysValueStrings: subkeysValueStrings,
+		subkeysValueArgs:    subkeysValueArgs,
+		uidsValueStrings:    uidsValueStrings,
+		uidsValueArgs:       uidsValueArgs,
+	}
+}
+
+// sqlBunch.append() appends the *Docs associated with a single key to a bunch of SQL arguments.
+// It does nothing and returns false if appending would have exceeded any of the bunch limits.
+func (b *sqlBunch) append(keyDoc *types.KeyDoc, subKeyDocs []types.SubKeyDoc, uidDocs []types.UserIdDoc) (ok bool) {
+	lenSKIA := len(subKeyDocs)
+	lenUIA := len(uidDocs)
+	totKeyArgs := b.totKeyArgs + keysNumColumns
+	totSubkeyArgs := b.totSubkeyArgs + subkeysNumColumns*lenSKIA
+	totUidArgs := b.totUidArgs + useridsNumColumns*lenUIA
+	if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) || (totUidArgs > uidsInBunch*useridsNumColumns) {
+		return false
+	}
+	b.totKeyArgs, b.totSubkeyArgs, b.totUidArgs = totKeyArgs, totSubkeyArgs, totUidArgs
+	b.keysValueStrings = append(b.keysValueStrings,
+		fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
+			b.i*keysNumColumns+1, b.i*keysNumColumns+2, b.i*keysNumColumns+3, b.i*keysNumColumns+4, b.i*keysNumColumns+5, b.i*keysNumColumns+6, b.i*keysNumColumns+7, b.i*keysNumColumns+8))
+	insTime := time.Now().UTC()
+	b.keysValueArgs = append(b.keysValueArgs, keyDoc.RFingerprint, keyDoc.Doc,
+		insTime, insTime, insTime, keyDoc.MD5, keyDoc.Keywords, keyDoc.VFingerprint)
+	b.i++
+
+	for sidx := 0; sidx < lenSKIA; sidx, b.j = sidx+1, b.j+1 {
+		b.subkeysValueStrings = append(b.subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)",
+			b.j*subkeysNumColumns+1, b.j*subkeysNumColumns+2, b.j*subkeysNumColumns+3))
+		b.subkeysValueArgs = append(b.subkeysValueArgs,
+			subKeyDocs[sidx].RFingerprint, subKeyDocs[sidx].RSubKeyFp, subKeyDocs[sidx].VSubKeyFp)
+	}
+	for uidx := 0; uidx < lenUIA; uidx, b.k = uidx+1, b.k+1 {
+		b.uidsValueStrings = append(b.uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)",
+			b.k*useridsNumColumns+1, b.k*useridsNumColumns+2, b.k*useridsNumColumns+3, b.k*useridsNumColumns+4))
+		b.uidsValueArgs = append(b.uidsValueArgs,
+			uidDocs[uidx].RFingerprint, uidDocs[uidx].UidString, uidDocs[uidx].Identity, uidDocs[uidx].Confidence)
 	}
 	return true
 }
 
 // bulkInsertSend copies the constructed database rows to the postgres in-memory tables
 // Copyin tables are TRUNCATEd inside the transaction instead of DROPping them between transactions, which is racy
-func (bs *bulkSession) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings []string, keysValueArgs, subkeysValueArgs, uidsValueArgs []any, result *hkpstorage.InsertError) (ok bool) {
+func (bs *bulkSession) bulkInsertSend(bunch *sqlBunch, result *hkpstorage.InsertError) (ok bool) {
 	// Send all keys to in-mem tables to the pg server; *no constraints checked*
 	keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint) VALUES %s",
-		keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
+		keys_copyin_temp_table_name, strings.Join(bunch.keysValueStrings, ","))
 	err := bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinKeys, keystmt},
 		"INSERT INTO "+keys_copyin_temp_table_name,
-		[][]any{{}, keysValueArgs})
+		[][]any{{}, bunch.keysValueArgs})
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not send key bunch: %v", err)
 		return false
 	}
 
-	if len(subkeysValueArgs) > 0 {
+	if len(bunch.subkeysValueArgs) > 0 {
 		// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
 		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp, vsubfp) VALUES %s",
-			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
+			subkeys_copyin_temp_table_name, strings.Join(bunch.subkeysValueStrings, ","))
 		err = bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinSubkeys, subkeystmt},
 			"INSERT INTO "+subkeys_copyin_temp_table_name,
-			[][]any{{}, subkeysValueArgs})
+			[][]any{{}, bunch.subkeysValueArgs})
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not send subkey bunch: %v", err)
@@ -443,13 +479,13 @@ func (bs *bulkSession) bulkInsertSend(keysValueStrings, subkeysValueStrings, uid
 		}
 	}
 
-	if len(uidsValueArgs) > 0 {
+	if len(bunch.uidsValueArgs) > 0 {
 		// Send all userids to in-mem tables to the pg server; *no constraints checked*
 		useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, identity, confidence) VALUES %s",
-			userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
+			userids_copyin_temp_table_name, strings.Join(bunch.uidsValueStrings, ","))
 		err = bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinUserIds, useridstmt},
 			"INSERT INTO "+userids_copyin_temp_table_name,
-			[][]any{{}, uidsValueArgs})
+			[][]any{{}, bunch.uidsValueArgs})
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not send userid bunch: %v", err)
@@ -609,65 +645,33 @@ func (bs *bulkSession) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage
 }
 
 // bulkReindexDoCopy insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
-// TODO: this duplicates a lot of code from bulkInsertDoCopy; find a DRYer way
 func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
 	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
 	defer keyDocsPullStop()
 	pullOk := true
 	var kd *types.KeyDoc
 	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
-		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
-		keysValueStrings := make([]string, 0, keysInBunch)
-		keysValueArgs := make([]any, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
-		subkeysValueStrings := make([]string, 0, subkeysInBunch)
-		subkeysValueArgs := make([]any, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
+		bunch := newSqlBunch()
 		subKeyDocs := make([][]types.SubKeyDoc, uidsInBunch)
-		uidsValueStrings := make([]string, 0, uidsInBunch)
-		uidsValueArgs := make([]any, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
 		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
 		kd, pullOk = keyDocsPull()
 		if !pullOk {
 			return true
 		}
-		for i, j, k := 0, 0, 0; pullOk; idx, i = idx+1, i+1 {
+		for ; pullOk; idx = idx + 1 {
 			subKeyDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
-			lenSKIA := len(subKeyDocs[idx])
-			lenUIA := len(uidDocs[idx])
-			totKeyArgs += keysNumColumns
-			totSubkeyArgs += subkeysNumColumns * lenSKIA
-			totUidArgs += useridsNumColumns * lenUIA
-			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) || (totUidArgs > uidsInBunch*useridsNumColumns) {
-				totKeyArgs -= keysNumColumns
-				totSubkeyArgs -= subkeysNumColumns * lenSKIA
-				totUidArgs -= useridsNumColumns * lenUIA
+			kd.Doc = "{}"                                      // don't re-upload the whole Doc when reindexing
+			if !bunch.append(kd, subKeyDocs[idx], uidDocs[idx]) {
 				break
-			}
-			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
-					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
-			insTime := time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
-				insTime, insTime, insTime, kd.MD5, kd.Keywords, kd.VFingerprint)
-
-			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
-				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
-				subkeysValueArgs = append(subkeysValueArgs,
-					subKeyDocs[idx][sidx].RFingerprint, subKeyDocs[idx][sidx].RSubKeyFp, subKeyDocs[idx][sidx].VSubKeyFp)
-			}
-			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
-				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
-				uidsValueArgs = append(uidsValueArgs,
-					uidDocs[idx][uidx].RFingerprint, uidDocs[idx][uidx].UidString, uidDocs[idx][uidx].Identity, uidDocs[idx][uidx].Confidence)
 			}
 			kd, pullOk = keyDocsPull()
 		}
-
-		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
-		ok := bs.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
+		ok := bs.bulkInsertSend(bunch, result)
 		if !ok {
 			return false
 		}
-		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, bunch.totSubkeyArgs/subkeysNumColumns, bunch.totUidArgs/useridsNumColumns)
 	}
 	return true
 }
