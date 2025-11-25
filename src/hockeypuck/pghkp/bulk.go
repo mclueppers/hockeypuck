@@ -652,7 +652,7 @@ func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result
 	var kd *types.KeyDoc
 	for idx := 0; pullOk; {
 		bunch := newSqlBunch()
-		subKeyDocs := make([][]types.SubKeyDoc, uidsInBunch)
+		subKeyDocs := make([][]types.SubKeyDoc, subkeysInBunch)
 		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
 		kd, pullOk = keyDocsPull()
 		if !pullOk {
