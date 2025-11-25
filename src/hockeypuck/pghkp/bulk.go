@@ -362,29 +362,9 @@ func (bs *bulkSession) bulkInsertSendBunchTx(keystmts []string, msgSpec string, 
 	return nil
 }
 
-// TODO: these are effectively duplicates of KeyDoc, SubKeyDoc, UserIdDoc - can we merge them?
-type keyInsertArgs struct {
-	RFingerprint *string
-	jsonStrDoc   *string
-	MD5          *string
-	keywords     *string
-	VFingerprint *string
-}
-type subkeyInsertArgs struct {
-	keyRFingerprint    *string
-	subkeyRFingerprint *string
-	subkeyVFingerprint *string
-}
-type uidInsertArgs struct {
-	RFingerprint *string
-	UidString    *string
-	Identity     *string
-	Confidence   *int
-}
-
 // Insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
-func (bs *bulkSession) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]subkeyInsertArgs, uidInsArgs [][]uidInsertArgs, result *hkpstorage.InsertError) (ok bool) {
-	lenKIA := len(keyInsArgs)
+func (bs *bulkSession) bulkInsertDoCopy(keyDocs []types.KeyDoc, subKeyDocs [][]types.SubKeyDoc, uidDocs [][]types.UserIdDoc, result *hkpstorage.InsertError) (ok bool) {
+	lenKIA := len(keyDocs)
 	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
 		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
 		keysValueStrings := make([]string, 0, keysInBunch)
@@ -394,8 +374,8 @@ func (bs *bulkSession) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs 
 		uidsValueStrings := make([]string, 0, uidsInBunch)
 		uidsValueArgs := make([]any, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
 		for i, j, k := 0, 0, 0; idx < lenKIA; idx, i = idx+1, i+1 {
-			lenSKIA := len(skeyInsArgs[idx])
-			lenUIA := len(uidInsArgs[idx])
+			lenSKIA := len(subKeyDocs[idx])
+			lenUIA := len(uidDocs[idx])
 			totKeyArgs += keysNumColumns
 			totSubkeyArgs += subkeysNumColumns * lenSKIA
 			totUidArgs += useridsNumColumns * lenUIA
@@ -408,18 +388,18 @@ func (bs *bulkSession) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs 
 				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
 					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
 			insTime := time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, *keyInsArgs[idx].RFingerprint, *keyInsArgs[idx].jsonStrDoc,
-				insTime, insTime, insTime, *keyInsArgs[idx].MD5, *keyInsArgs[idx].keywords, *keyInsArgs[idx].VFingerprint)
+			keysValueArgs = append(keysValueArgs, keyDocs[idx].RFingerprint, keyDocs[idx].Doc,
+				insTime, insTime, insTime, keyDocs[idx].MD5, keyDocs[idx].Keywords, keyDocs[idx].VFingerprint)
 
 			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
 				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
 				subkeysValueArgs = append(subkeysValueArgs,
-					*skeyInsArgs[idx][sidx].keyRFingerprint, *skeyInsArgs[idx][sidx].subkeyRFingerprint, *skeyInsArgs[idx][sidx].subkeyVFingerprint)
+					subKeyDocs[idx][sidx].RFingerprint, subKeyDocs[idx][sidx].RSubKeyFp, subKeyDocs[idx][sidx].VSubKeyFp)
 			}
 			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
 				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
 				uidsValueArgs = append(uidsValueArgs,
-					*uidInsArgs[idx][uidx].RFingerprint, *uidInsArgs[idx][uidx].UidString, *uidInsArgs[idx][uidx].Identity, *uidInsArgs[idx][uidx].Confidence)
+					uidDocs[idx][uidx].RFingerprint, uidDocs[idx][uidx].UidString, uidDocs[idx][uidx].Identity, uidDocs[idx][uidx].Confidence)
 			}
 		}
 
@@ -504,9 +484,9 @@ func (bs *bulkSession) bulkInsertCopyOld(oldKeys []string, result *hkpstorage.In
 
 func (bs *bulkSession) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError) (int, bool) {
 	var key *openpgp.PrimaryKey
-	keyInsArgs := make([]keyInsertArgs, 0, len(keys))
-	skeyInsArgs := make([][]subkeyInsertArgs, 0, len(keys))
-	uidInsArgs := make([][]uidInsertArgs, 0, len(keys))
+	keyDocs := make([]types.KeyDoc, 0, len(keys))
+	subKeyDocs := make([][]types.SubKeyDoc, 0, len(keys))
+	uidDocs := make([][]types.UserIdDoc, 0, len(keys))
 	jsonStrs, theKeywords, uids := make([]string, len(keys)), make([]string, len(keys)), make([][]types.UserIdDoc, len(keys))
 
 	unprocessed, sidx, uidx, i := 0, 0, 0, 0
@@ -523,24 +503,27 @@ func (bs *bulkSession) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, re
 		}
 		jsonStrs[i] = string(jsonBuf)
 		theKeywords[i], uids[i] = types.KeywordsTSVector(key)
-		keyInsArgs = keyInsArgs[:i+1] // re-slice +1
-		keyInsArgs[i] = keyInsertArgs{&key.RFingerprint, &jsonStrs[i], &key.MD5, &theKeywords[i], &key.VFingerprint}
+		keyDocs = keyDocs[:i+1] // re-slice +1
+		keyDocs[i] = types.KeyDoc{RFingerprint: key.RFingerprint,
+			VFingerprint: key.VFingerprint, MD5: key.MD5, Doc: jsonStrs[i], Keywords: theKeywords[i]}
 
-		skeyInsArgs = skeyInsArgs[:i+1] // re-slice +1
-		skeyInsArgs[i] = make([]subkeyInsertArgs, 0, len(key.SubKeys))
+		subKeyDocs = subKeyDocs[:i+1] // re-slice +1
+		subKeyDocs[i] = make([]types.SubKeyDoc, 0, len(key.SubKeys))
 		for sidx = 0; sidx < len(key.SubKeys); sidx++ {
-			skeyInsArgs[i] = skeyInsArgs[i][:sidx+1] // re-slice +1
-			skeyInsArgs[i][sidx] = subkeyInsertArgs{&key.RFingerprint, &key.SubKeys[sidx].RFingerprint, &key.SubKeys[sidx].VFingerprint}
+			subKeyDocs[i] = subKeyDocs[i][:sidx+1] // re-slice +1
+			subKeyDocs[i][sidx] = types.SubKeyDoc{RFingerprint: key.RFingerprint,
+				RSubKeyFp: key.SubKeys[sidx].RFingerprint, VSubKeyFp: key.SubKeys[sidx].VFingerprint}
 		}
-		uidInsArgs = uidInsArgs[:i+1] // re-slice +1
-		uidInsArgs[i] = make([]uidInsertArgs, 0, len(uids[i]))
+		uidDocs = uidDocs[:i+1] // re-slice +1
+		uidDocs[i] = make([]types.UserIdDoc, 0, len(uids[i]))
 		for uidx = 0; uidx < len(uids[i]); uidx++ {
-			uidInsArgs[i] = uidInsArgs[i][:uidx+1] // re-slice +1
-			uidInsArgs[i][uidx] = uidInsertArgs{&key.RFingerprint, &uids[i][uidx].UidString, &uids[i][uidx].Identity, &uids[i][uidx].Confidence}
+			uidDocs[i] = uidDocs[i][:uidx+1] // re-slice +1
+			uidDocs[i][uidx] = types.UserIdDoc{RFingerprint: key.RFingerprint,
+				UidString: uids[i][uidx].UidString, Identity: uids[i][uidx].Identity, Confidence: uids[i][uidx].Confidence}
 		}
 		i++
 	}
-	ok := bs.bulkInsertDoCopy(keyInsArgs, skeyInsArgs, uidInsArgs, result)
+	ok := bs.bulkInsertDoCopy(keyDocs, subKeyDocs, uidDocs, result)
 	return unprocessed, ok
 }
 
@@ -637,7 +620,7 @@ func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result
 		keysValueArgs := make([]any, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
 		subkeysValueStrings := make([]string, 0, subkeysInBunch)
 		subkeysValueArgs := make([]any, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
-		subkeysDocs := make([][]types.SubKeyDoc, uidsInBunch)
+		subKeyDocs := make([][]types.SubKeyDoc, uidsInBunch)
 		uidsValueStrings := make([]string, 0, uidsInBunch)
 		uidsValueArgs := make([]any, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
 		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
@@ -646,8 +629,8 @@ func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result
 			return true
 		}
 		for i, j, k := 0, 0, 0; pullOk; idx, i = idx+1, i+1 {
-			subkeysDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
-			lenSKIA := len(subkeysDocs[idx])
+			subKeyDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
+			lenSKIA := len(subKeyDocs[idx])
 			lenUIA := len(uidDocs[idx])
 			totKeyArgs += keysNumColumns
 			totSubkeyArgs += subkeysNumColumns * lenSKIA
@@ -667,7 +650,7 @@ func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result
 			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
 				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
 				subkeysValueArgs = append(subkeysValueArgs,
-					subkeysDocs[idx][sidx].RFingerprint, subkeysDocs[idx][sidx].RSubKeyFp, subkeysDocs[idx][sidx].VSubKeyFp)
+					subKeyDocs[idx][sidx].RFingerprint, subKeyDocs[idx][sidx].RSubKeyFp, subKeyDocs[idx][sidx].VSubKeyFp)
 			}
 			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
 				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
