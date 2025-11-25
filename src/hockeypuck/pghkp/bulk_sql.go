@@ -298,13 +298,13 @@ const bulkTxCleanCopyinKeys string = `TRUNCATE keys_copyin
 `
 const bulkTxCleanCopyinSubkeys string = `TRUNCATE subkeys_copyin
 `
-const bulkTxCleanCopyinUserIds string = `TRUNCATE userids_copyin
+const bulkTxCleanCopyinUserIDs string = `TRUNCATE userids_copyin
 `
 const bulkTxCleanCheckedKeys string = `TRUNCATE keys_checked
 `
 const bulkTxCleanCheckedSubkeys string = `TRUNCATE subkeys_checked
 `
-const bulkTxCleanCheckedUserIds string = `TRUNCATE userids_checked
+const bulkTxCleanCheckedUserIDs string = `TRUNCATE userids_checked
 `
 const bulkTxCleanOldKeys string = `TRUNCATE keys_old
 `

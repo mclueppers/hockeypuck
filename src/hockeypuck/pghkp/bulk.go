@@ -208,7 +208,7 @@ func (bs *bulkSession) bulkInsertCheckSubkeys(result *hkpstorage.InsertError) (n
 	//     Delete 1st-stage checked subkeys above & those with NULL fields
 	// (3) Single-copy of in-file Dups but not in-DB Dups
 	txStrs := []string{bulkTxCleanCheckedSubkeys, bulkTxFilterUniqueSubkeys, bulkTxPrepSubkeyStats, bulkTxFilterDupSubkeys}
-	msgStrs := []string{"bulkTx-clean-checked-subkeys", "bulkTx-filter-unique-subkeys", "bulkTx-prep-subkeys-stats", "bulkTx-filter-dup-subkeys"}
+	msgStrs := []string{"bulkTxCleanCheckedSubkeys", "bulkTxFilterUniqueSubkeys", "bulkTxPrepSubkeyStats", "bulkTxFilterDupSubkeys"}
 	err = bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -231,8 +231,8 @@ func (bs *bulkSession) bulkInsertCheckUserIDs(result *hkpstorage.InsertError) (n
 	// (2) Keep only userids with Duplicates in userids_copyin:
 	//     Delete 1st-stage checked userids above & those with NULL fields
 	// (3) Single-copy of in-file Dups but not in-DB Dups
-	txStrs := []string{bulkTxCleanCheckedUserIds, bulkTxFilterUniqueUserIDs, bulkTxPrepUserIDStats, bulkTxFilterDupUserIDs}
-	msgStrs := []string{"bulkTx-clean-checked-userids", "bulkTx-filter-unique-userids", "bulkTx-prep-userids-stats", "bulkTx-filter-dup-userids"}
+	txStrs := []string{bulkTxCleanCheckedUserIDs, bulkTxFilterUniqueUserIDs, bulkTxPrepUserIDStats, bulkTxFilterDupUserIDs}
+	msgStrs := []string{"bulkTxCleanCheckedUserIDs", "bulkTxFilterUniqueUserIDs", "bulkTxPrepUserIDStats", "bulkTxFilterDupUserIDs"}
 	err = bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -255,7 +255,7 @@ func (bs *bulkSession) bulkInsertCheckKeys(result *hkpstorage.InsertError) (numN
 	// (2) Keep only keys with Duplicates in keys_copyin: delete 1st-stage checked keys & tuples with NULL fields
 	// (3) Insert single copy of in-file Duplicates, if they have no Duplicate in final keys table (in DB)
 	txStrs := []string{bulkTxCleanCheckedKeys, bulkTxFilterUniqueKeys, bulkTxPrepKeyStats, bulkTxFilterDupKeys}
-	msgStrs := []string{"bulkTx-clean-checked-keys", "bulkTx-filter-unique-keys", "bulkTx-prep-key-stats", "bulkTx-filter-dup-keys"}
+	msgStrs := []string{"bulkTxCleanCheckedKeys", "bulkTxFilterUniqueKeys", "bulkTxPrepKeyStats", "bulkTxFilterDupKeys"}
 	err = bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -283,7 +283,7 @@ func (bs *bulkSession) bulkInsertFromCopyinTables(result *hkpstorage.InsertError
 	// Batch INSERT all checked-for-constraints keys from memory tables (should need no checks!!!!)
 	// Final batch-insertion in keys/subkeys tables without any checks: _must not_ give any errors
 	txStrs := []string{bulkTxInsertKeys, bulkTxInsertSubkeys, bulkTxInsertUserIDs}
-	msgStrs := []string{"bulkTx-insert-keys", "bulkTx-insert-subkeys", "bulkTx-insert-userids"}
+	msgStrs := []string{"bulkTxInsertKeys", "bulkTxInsertSubkeys", "bulkTxInsertUserIDs"}
 	err := bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -316,10 +316,10 @@ func (bs *bulkSession) bulkReloadFromCopyinTables(result *hkpstorage.InsertError
 		bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs,
 	}
 	msgStrs := []string{
-		"bulkTx-clean-checked-keys", "bulkTx-journal-keys",
-		"bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
-		"bulkTx-clear-keys", "bulkTx-update-keys",
-		"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulkTx-reindex-userids",
+		"bulkTxCleanCheckedKeys", "bulkTxJournalKeys",
+		"bulkTxClearDupSubkeys", "bulkTxClearOrphanSubkeys", "bulkTxClearDupUserIDs", "bulkTxClearOrphanUserIDs",
+		"bulkTxClearKeys", "bulkTxUpdateKeys",
+		"bulkTxInsertSubkeys", "bulkTxReindexSubkeys", "bulkTxInsertUserids", "bulkTxReindexUserIDs",
 	}
 	err := bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
@@ -483,7 +483,7 @@ func (bs *bulkSession) bulkInsertSend(bunch *sqlBunch, result *hkpstorage.Insert
 		// Send all userids to in-mem tables to the pg server; *no constraints checked*
 		useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, identity, confidence) VALUES %s",
 			userids_copyin_temp_table_name, strings.Join(bunch.uidsValueStrings, ","))
-		err = bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinUserIds, useridstmt},
+		err = bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinUserIDs, useridstmt},
 			"INSERT INTO "+userids_copyin_temp_table_name,
 			[][]any{{}, bunch.uidsValueArgs})
 		if err != nil {
@@ -703,7 +703,7 @@ func (bs *bulkSession) bulkReindexFromCopyinTables(result *hkpstorage.InsertErro
 		// update each table on disk separately, and fail fast to see which transaction failed
 		// write to the keys table last, so that reindex will retry on the next pass
 		txStrs := []string{bulkTxInsertSubkeys, bulkTxReindexSubkeys}
-		msgStrs := []string{"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys"}
+		msgStrs := []string{"bulkTxInsertSubkeys", "bulkTxReindexSubkeys"}
 		err := bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex subkeys: %v", err)
@@ -711,7 +711,7 @@ func (bs *bulkSession) bulkReindexFromCopyinTables(result *hkpstorage.InsertErro
 			return false
 		}
 		txStrs = []string{bulkTxInsertUserIDs, bulkTxReindexUserIDs}
-		msgStrs = []string{"bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
+		msgStrs = []string{"bulkTxInsertUserIDs", "bulkTxReindexUserIDs"}
 		err = bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex userids: %v", err)
@@ -719,7 +719,7 @@ func (bs *bulkSession) bulkReindexFromCopyinTables(result *hkpstorage.InsertErro
 			return false
 		}
 		txStrs = []string{bulkTxReindexKeys}
-		msgStrs = []string{"bulkTx-reindex-keys"}
+		msgStrs = []string{"bulkTxReindexKeys"}
 		err = bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex keys: %v", err)
@@ -734,9 +734,9 @@ func (bs *bulkSession) bulkReindexFromCopyinTables(result *hkpstorage.InsertErro
 			bulkTxReindexKeys,
 		}
 		msgStrs := []string{
-			"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys",
-			"bulkTx-insert-userids", "bulk-Tx-reindex-userids",
-			"bulkTx-reindex-keys",
+			"bulkTxClearDupSubkeys", "bulkTxInsertSubkeys", "bulkTxReindexSubkeys",
+			"bulkTxClearDupUserIDs", "bulkTxInsertUserIDs", "bulkTxReindexUserIDs",
+			"bulkTxReindexKeys",
 		}
 		err := bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
