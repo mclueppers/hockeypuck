@@ -18,6 +18,8 @@
 package pghkp
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"hockeypuck/hkp/jsonhkp"
@@ -60,9 +62,37 @@ const uidsInBunch int = 64000 / useridsNumColumns
 // will trigger a bulk insertion. Otherwise, Insert(..) preceeds one key at a time.
 const minKeys2UseBulk int = 3500
 
-func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (maxDups, minDups, keysInserted, subkeysInserted, useridsInserted int) {
+// bulkSession is a type representing a single connection to the database.
+// This is required because postgres temporary tables are local to a particular session,
+// therefore we need to be sure that transactions depending on temporary tables are
+// always sent over the same connection that the tables were created in.
+type bulkSession struct {
+	st   *storage
+	conn *sql.Conn
+	ctx  context.Context
+}
+
+func (st *storage) newBulkSession() (bs *bulkSession, err error) {
+	ctx := context.Background()
+	conn, err := st.DB.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bs = &bulkSession{
+		st,
+		conn,
+		ctx,
+	}
+	return bs, nil
+}
+
+func (bs *bulkSession) Close() (err error) {
+	return bs.conn.Close()
+}
+
+func (bs *bulkSession) bulkInsertGetStats(result *hkpstorage.InsertError) (maxDups, minDups, keysInserted, subkeysInserted, useridsInserted int) {
 	// Get Duplicate stats
-	err := st.QueryRow(bulkInsNumMinDups).Scan(&minDups)
+	err := bs.conn.QueryRowContext(bs.ctx, bulkInsNumMinDups).Scan(&minDups)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update duplicate stats: %v", err)
@@ -70,7 +100,7 @@ func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (maxDups, 
 	}
 	// In-file duplicates may be duplicates even if we insert a subkey for a key's rfp
 	// FIXME: This might be costly and could be removed...
-	err = st.QueryRow(bulkInsNumPossibleDups).Scan(&maxDups)
+	err = bs.conn.QueryRowContext(bs.ctx, bulkInsNumPossibleDups).Scan(&maxDups)
 	maxDups += minDups
 	if err != nil {
 		result.Errors = append(result.Errors, err)
@@ -78,19 +108,19 @@ func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (maxDups, 
 		maxDups = 0
 	}
 	// Get keys/subkeys inserted
-	err = st.QueryRow(bulkInsertedKeysNum).Scan(&keysInserted)
+	err = bs.conn.QueryRowContext(bs.ctx, bulkInsertedKeysNum).Scan(&keysInserted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update keys inserted stats: %v", err)
 		keysInserted = 0
 	}
-	err = st.QueryRow(bulkInsertedSubkeysNum).Scan(&subkeysInserted)
+	err = bs.conn.QueryRowContext(bs.ctx, bulkInsertedSubkeysNum).Scan(&subkeysInserted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update subkeys inserted stats: %v", err)
 		subkeysInserted = 0
 	}
-	err = st.QueryRow(bulkInsertedUserIDsNum).Scan(&useridsInserted)
+	err = bs.conn.QueryRowContext(bs.ctx, bulkInsertedUserIDsNum).Scan(&useridsInserted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update userids inserted stats: %v", err)
@@ -99,27 +129,27 @@ func (st *storage) bulkInsertGetStats(result *hkpstorage.InsertError) (maxDups, 
 	return
 }
 
-func (st *storage) bulkReloadGetStats(result *hkpstorage.InsertError) (keysUpdated, subkeysInserted, useridsInserted, keysDeleted int) {
+func (bs *bulkSession) bulkReloadGetStats(result *hkpstorage.InsertError) (keysUpdated, subkeysInserted, useridsInserted, keysDeleted int) {
 	// The number of keys copied and the number updated should be the same (TODO: check this!)
-	err := st.QueryRow(bulkCopiedKeysNum).Scan(&keysUpdated)
+	err := bs.conn.QueryRowContext(bs.ctx, bulkCopiedKeysNum).Scan(&keysUpdated)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update keys updated stats: %v", err)
 		keysUpdated = 0
 	}
-	err = st.QueryRow(bulkInsertedSubkeysNum).Scan(&subkeysInserted)
+	err = bs.conn.QueryRowContext(bs.ctx, bulkInsertedSubkeysNum).Scan(&subkeysInserted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update subkeys inserted stats: %v", err)
 		subkeysInserted = 0
 	}
-	err = st.QueryRow(bulkInsertedUserIDsNum).Scan(&useridsInserted)
+	err = bs.conn.QueryRowContext(bs.ctx, bulkInsertedUserIDsNum).Scan(&useridsInserted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update userids inserted stats: %v", err)
 		useridsInserted = 0
 	}
-	err = st.QueryRow(bulkDeletedKeysNum).Scan(&keysDeleted)
+	err = bs.conn.QueryRowContext(bs.ctx, bulkDeletedKeysNum).Scan(&keysDeleted)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update subkeys inserted stats: %v", err)
@@ -128,11 +158,11 @@ func (st *storage) bulkReloadGetStats(result *hkpstorage.InsertError) (keysUpdat
 	return
 }
 
-func (st *storage) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error) {
+func (bs *bulkSession) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error) {
 	log.Debugf("transaction started: %q", jobDesc)
 	t := time.Now()
 	// In single transaction
-	tx, err := st.Begin()
+	tx, err := bs.conn.BeginTx(bs.ctx, nil)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -164,21 +194,22 @@ func (st *storage) bulkExecSingleTx(bulkJobString, jobDesc []string) (err error)
 	return err
 }
 
-func (st *storage) bulkInsertCheckSubkeys(result *hkpstorage.InsertError) (numNulls int, ok bool) {
+func (bs *bulkSession) bulkInsertCheckSubkeys(result *hkpstorage.InsertError) (numNulls int, ok bool) {
 	// NULLs stats
-	err := st.QueryRow(bulkInsNumNullSubkeys).Scan(&numNulls)
+	err := bs.conn.QueryRowContext(bs.ctx, bulkInsNumNullSubkeys).Scan(&numNulls)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update subkeys with NULL stats: %v", err)
 	}
 
-	// (1) Itermediate insert: no NULL fields & no Duplicates (in-file or in DB)
+	// (0) Remove any stale entries from previous transactions
+	// (1) Intermediate insert: no NULL fields & no Duplicates (in-file or in DB)
 	// (2) Keep only subkeys with Duplicates in subkeys_copyin:
 	//     Delete 1st-stage checked subkeys above & those with NULL fields
 	// (3) Single-copy of in-file Dups but not in-DB Dups
-	txStrs := []string{bulkTxFilterUniqueSubkeys, bulkTxPrepSubkeyStats, bulkTxFilterDupSubkeys}
-	msgStrs := []string{"bulkTx-filter-unique-subkeys", "bulkTx-prep-subkeys-stats", "bulkTx-filter-dup-subkeys"}
-	err = st.bulkExecSingleTx(txStrs, msgStrs)
+	txStrs := []string{bulkTxCleanCheckedSubkeys, bulkTxFilterUniqueSubkeys, bulkTxPrepSubkeyStats, bulkTxFilterDupSubkeys}
+	msgStrs := []string{"bulkTxCleanCheckedSubkeys", "bulkTxFilterUniqueSubkeys", "bulkTxPrepSubkeyStats", "bulkTxFilterDupSubkeys"}
+	err = bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not check subkeys: %v", err)
@@ -187,21 +218,22 @@ func (st *storage) bulkInsertCheckSubkeys(result *hkpstorage.InsertError) (numNu
 	return numNulls, true
 }
 
-func (st *storage) bulkInsertCheckUserIDs(result *hkpstorage.InsertError) (numNulls int, ok bool) {
+func (bs *bulkSession) bulkInsertCheckUserIDs(result *hkpstorage.InsertError) (numNulls int, ok bool) {
 	// NULLs stats
-	err := st.QueryRow(bulkInsNumNullUserIDs).Scan(&numNulls)
+	err := bs.conn.QueryRowContext(bs.ctx, bulkInsNumNullUserIDs).Scan(&numNulls)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update userids with NULL stats: %v", err)
 	}
 
-	// (1) Itermediate insert: no NULL fields & no Duplicates (in-file or in DB)
+	// (0) Remove any stale entries from previous transactions
+	// (1) Intermediate insert: no NULL fields & no Duplicates (in-file or in DB)
 	// (2) Keep only userids with Duplicates in userids_copyin:
 	//     Delete 1st-stage checked userids above & those with NULL fields
 	// (3) Single-copy of in-file Dups but not in-DB Dups
-	txStrs := []string{bulkTxFilterUniqueUserIDs, bulkTxPrepUserIDStats, bulkTxFilterDupUserIDs}
-	msgStrs := []string{"bulkTx-filter-unique-userids", "bulkTx-prep-userids-stats", "bulkTx-filter-dup-userids"}
-	err = st.bulkExecSingleTx(txStrs, msgStrs)
+	txStrs := []string{bulkTxCleanCheckedUserIDs, bulkTxFilterUniqueUserIDs, bulkTxPrepUserIDStats, bulkTxFilterDupUserIDs}
+	msgStrs := []string{"bulkTxCleanCheckedUserIDs", "bulkTxFilterUniqueUserIDs", "bulkTxPrepUserIDStats", "bulkTxFilterDupUserIDs"}
+	err = bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not check userids: %v", err)
@@ -210,20 +242,21 @@ func (st *storage) bulkInsertCheckUserIDs(result *hkpstorage.InsertError) (numNu
 	return numNulls, true
 }
 
-func (st *storage) bulkInsertCheckKeys(result *hkpstorage.InsertError) (numNulls int, ok bool) {
+func (bs *bulkSession) bulkInsertCheckKeys(result *hkpstorage.InsertError) (numNulls int, ok bool) {
 	// NULLs stats
-	err := st.QueryRow(bulkInsNumNullKeys).Scan(&numNulls)
+	err := bs.conn.QueryRowContext(bs.ctx, bulkInsNumNullKeys).Scan(&numNulls)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update keys with NULL stats: %v", err)
 	}
 
+	// (0) Remove any stale entries from previous transactions
 	// (1) rfingerprint & md5 are also UNIQUE in keys_checked so no duplicates inside this same file allowed
 	// (2) Keep only keys with Duplicates in keys_copyin: delete 1st-stage checked keys & tuples with NULL fields
 	// (3) Insert single copy of in-file Duplicates, if they have no Duplicate in final keys table (in DB)
-	txStrs := []string{bulkTxFilterUniqueKeys, bulkTxPrepKeyStats, bulkTxFilterDupKeys}
-	msgStrs := []string{"bulkTx-filter-unique-keys", "bulkTx-prep-key-stats", "bulkTx-filter-dup-keys"}
-	err = st.bulkExecSingleTx(txStrs, msgStrs)
+	txStrs := []string{bulkTxCleanCheckedKeys, bulkTxFilterUniqueKeys, bulkTxPrepKeyStats, bulkTxFilterDupKeys}
+	msgStrs := []string{"bulkTxCleanCheckedKeys", "bulkTxFilterUniqueKeys", "bulkTxPrepKeyStats", "bulkTxFilterDupKeys"}
+	err = bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not check keys: %v", err)
@@ -232,26 +265,26 @@ func (st *storage) bulkInsertCheckKeys(result *hkpstorage.InsertError) (numNulls
 	return numNulls, true
 }
 
-func (st *storage) bulkInsertFromCopyinTables(result *hkpstorage.InsertError) (nullKeys, nullSubkeys, nullUserIDs int, ok bool) {
+func (bs *bulkSession) bulkInsertFromCopyinTables(result *hkpstorage.InsertError) (nullKeys, nullSubkeys, nullUserIDs int, ok bool) {
 	keysOK, subkeysOK, useridsOK := true, true, true
 	// key batch-processing
-	if nullKeys, keysOK = st.bulkInsertCheckKeys(result); !keysOK {
+	if nullKeys, keysOK = bs.bulkInsertCheckKeys(result); !keysOK {
 		return 0, 0, 0, false
 	}
 	// subkey batch-processing
-	if nullSubkeys, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
+	if nullSubkeys, subkeysOK = bs.bulkInsertCheckSubkeys(result); !subkeysOK {
 		return 0, 0, 0, false
 	}
 	// userid batch-processing
-	if nullUserIDs, useridsOK = st.bulkInsertCheckUserIDs(result); !useridsOK {
+	if nullUserIDs, useridsOK = bs.bulkInsertCheckUserIDs(result); !useridsOK {
 		return 0, 0, 0, false
 	}
 
 	// Batch INSERT all checked-for-constraints keys from memory tables (should need no checks!!!!)
 	// Final batch-insertion in keys/subkeys tables without any checks: _must not_ give any errors
 	txStrs := []string{bulkTxInsertKeys, bulkTxInsertSubkeys, bulkTxInsertUserIDs}
-	msgStrs := []string{"bulkTx-insert-keys", "bulkTx-insert-subkeys", "bulkTx-insert-userids"}
-	err := st.bulkExecSingleTx(txStrs, msgStrs)
+	msgStrs := []string{"bulkTxInsertKeys", "bulkTxInsertSubkeys", "bulkTxInsertUserIDs"}
+	err := bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not insert keys: %v", err)
@@ -263,32 +296,32 @@ func (st *storage) bulkInsertFromCopyinTables(result *hkpstorage.InsertError) (n
 // bulkReloadFromCopyinTables updates a bunch of keys in-place.
 // It is similar to bulkInsertFromCopyinTables but performs no checks on keys (we assume the `keys` table is already sane)
 // We still have to check for duplicate subkeys, as these are not stripped from the json docs.
-func (st *storage) bulkReloadFromCopyinTables(result *hkpstorage.InsertError) (nullSubkeys, nullUserIDs int, ok bool) {
+func (bs *bulkSession) bulkReloadFromCopyinTables(result *hkpstorage.InsertError) (nullSubkeys, nullUserIDs int, ok bool) {
 	subkeysOK, useridsOK := true, true
 	// subkey batch-processing
-	if nullSubkeys, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
+	if nullSubkeys, subkeysOK = bs.bulkInsertCheckSubkeys(result); !subkeysOK {
 		return 0, 0, false
 	}
 	// userid batch-processing
-	if nullUserIDs, useridsOK = st.bulkInsertCheckUserIDs(result); !useridsOK {
+	if nullUserIDs, useridsOK = bs.bulkInsertCheckUserIDs(result); !useridsOK {
 		return 0, 0, false
 	}
 
 	// Batch UPDATE all keys from memory tables (should need no checks!!!!)
 	// Final batch-update in keys/subkeys tables without any checks: _must not_ give any errors
 	txStrs := []string{
-		bulkTxJournalKeys,
+		bulkTxCleanCheckedKeys, bulkTxJournalKeys,
 		bulkTxClearDupSubkeys, bulkTxClearOrphanSubkeys, bulkTxClearDupUserIDs, bulkTxClearOrphanUserIDs,
 		bulkTxClearKeys, bulkTxUpdateKeys,
 		bulkTxInsertSubkeys, bulkTxReindexSubkeys, bulkTxInsertUserIDs, bulkTxReindexUserIDs,
 	}
 	msgStrs := []string{
-		"bulkTx-journal-keys",
-		"bulkTx-clear-dup-subkeys", "bulkTx-clear-orphan-subkeys", "bulkTx-clear-dup-userids", "bulkTx-clear-orphan-userids",
-		"bulkTx-clear-keys", "bulkTx-update-keys",
-		"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys", "bulkTx-insert-userids", "bulkTx-reindex-userids",
+		"bulkTxCleanCheckedKeys", "bulkTxJournalKeys",
+		"bulkTxClearDupSubkeys", "bulkTxClearOrphanSubkeys", "bulkTxClearDupUserIDs", "bulkTxClearOrphanUserIDs",
+		"bulkTxClearKeys", "bulkTxUpdateKeys",
+		"bulkTxInsertSubkeys", "bulkTxReindexSubkeys", "bulkTxInsertUserids", "bulkTxReindexUserIDs",
 	}
-	err := st.bulkExecSingleTx(txStrs, msgStrs)
+	err := bs.bulkExecSingleTx(txStrs, msgStrs)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update keys: %v", err)
@@ -297,11 +330,11 @@ func (st *storage) bulkReloadFromCopyinTables(result *hkpstorage.InsertError) (n
 	return nullSubkeys, nullUserIDs, true
 }
 
-func (st *storage) bulkInsertSendBunchTx(keystmt, msgSpec string, keysValueArgs []interface{}) (err error) {
+func (bs *bulkSession) bulkInsertSendBunchTx(keystmts []string, msgSpec string, keysValueArgs [][]any) (err error) {
 	log.Debugf("transaction started: %q", msgSpec)
 	t := time.Now()
 	// In single transaction...
-	tx, err := st.Begin()
+	tx, err := bs.conn.BeginTx(bs.ctx, nil)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -313,107 +346,132 @@ func (st *storage) bulkInsertSendBunchTx(keystmt, msgSpec string, keysValueArgs 
 		}
 	}()
 
-	stmt, err := tx.Prepare(keystmt)
-	if err != nil {
-		return errors.Wrapf(err, "failure preparing %s (query='%v')", msgSpec, keystmt)
-	}
-	defer stmt.Close()
-	_, err = stmt.Exec(keysValueArgs...) // All keys in bunch
-	if err != nil {
-		return errors.Wrapf(err, "cannot simply send a bunch of %s to server (too large bunch?)", msgSpec)
+	for i, keystmt := range keystmts {
+		var stmt *sql.Stmt
+		stmt, err = tx.Prepare(keystmt)
+		if err != nil {
+			return errors.Wrapf(err, "failure preparing %s (query='%v')", msgSpec, keystmt)
+		}
+		defer stmt.Close()
+		_, err = stmt.Exec(keysValueArgs[i]...)
+		if err != nil {
+			return errors.Wrapf(err, "failure executing %s (query='%v')", msgSpec, keystmt)
+		}
 	}
 	log.Debugf("transaction finished in %v", time.Since(t))
 	return nil
 }
 
-// TODO: these are effectively duplicates of KeyDoc, SubKeyDoc, UserIdDoc - can we merge them?
-type keyInsertArgs struct {
-	RFingerprint *string
-	jsonStrDoc   *string
-	MD5          *string
-	keywords     *string
-	VFingerprint *string
-}
-type subkeyInsertArgs struct {
-	keyRFingerprint    *string
-	subkeyRFingerprint *string
-	subkeyVFingerprint *string
-}
-type uidInsertArgs struct {
-	RFingerprint *string
-	UidString    *string
-	Identity     *string
-	Confidence   *int
-}
-
 // Insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
-func (st *storage) bulkInsertDoCopy(keyInsArgs []keyInsertArgs, skeyInsArgs [][]subkeyInsertArgs, uidInsArgs [][]uidInsertArgs, result *hkpstorage.InsertError) (ok bool) {
-	lenKIA := len(keyInsArgs)
-	for idx, lastIdx := 0, 0; idx < lenKIA; lastIdx = idx {
-		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
-		keysValueStrings := make([]string, 0, keysInBunch)
-		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
-		subkeysValueStrings := make([]string, 0, subkeysInBunch)
-		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
-		uidsValueStrings := make([]string, 0, uidsInBunch)
-		uidsValueArgs := make([]interface{}, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
-		for i, j, k := 0, 0, 0; idx < lenKIA; idx, i = idx+1, i+1 {
-			lenSKIA := len(skeyInsArgs[idx])
-			lenUIA := len(uidInsArgs[idx])
-			totKeyArgs += keysNumColumns
-			totSubkeyArgs += subkeysNumColumns * lenSKIA
-			totUidArgs += useridsNumColumns * lenUIA
-			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
-				totKeyArgs -= keysNumColumns
-				totSubkeyArgs -= subkeysNumColumns * lenSKIA
+func (bs *bulkSession) bulkInsertDoCopy(keyDocs []types.KeyDoc, subKeyDocs [][]types.SubKeyDoc, uidDocs [][]types.UserIdDoc, result *hkpstorage.InsertError) (ok bool) {
+	lenKIA := len(keyDocs)
+	for idx := 0; idx < lenKIA; {
+		bunch := newSqlBunch()
+		for ; idx < lenKIA; idx = idx + 1 {
+			if !bunch.append(&keyDocs[idx], subKeyDocs[idx], uidDocs[idx]) {
 				break
 			}
-			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
-					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
-			insTime := time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, *keyInsArgs[idx].RFingerprint, *keyInsArgs[idx].jsonStrDoc,
-				insTime, insTime, insTime, *keyInsArgs[idx].MD5, *keyInsArgs[idx].keywords, *keyInsArgs[idx].VFingerprint)
-
-			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
-				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
-				subkeysValueArgs = append(subkeysValueArgs,
-					*skeyInsArgs[idx][sidx].keyRFingerprint, *skeyInsArgs[idx][sidx].subkeyRFingerprint, *skeyInsArgs[idx][sidx].subkeyVFingerprint)
-			}
-			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
-				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
-				uidsValueArgs = append(uidsValueArgs,
-					*uidInsArgs[idx][uidx].RFingerprint, *uidInsArgs[idx][uidx].UidString, *uidInsArgs[idx][uidx].Identity, *uidInsArgs[idx][uidx].Confidence)
-			}
 		}
-
-		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
-		ok := st.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", bunch.i, bunch.j, bunch.k)
+		ok := bs.bulkInsertSend(bunch, result)
 		if !ok {
 			return false
 		}
-		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", bunch.i, bunch.j, bunch.k)
+	}
+	return true
+}
+
+// A bunch of SQL arguments, together with the internal state required by sqlBunch.append()
+type sqlBunch struct {
+	keysValueStrings    []string
+	subkeysValueStrings []string
+	uidsValueStrings    []string
+	keysValueArgs       []any
+	subkeysValueArgs    []any
+	uidsValueArgs       []any
+	totKeyArgs          int
+	totSubkeyArgs       int
+	totUidArgs          int
+	i                   int
+	j                   int
+	k                   int
+}
+
+func newSqlBunch() *sqlBunch {
+	keysValueStrings := make([]string, 0, keysInBunch)
+	keysValueArgs := make([]any, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
+	subkeysValueStrings := make([]string, 0, subkeysInBunch)
+	subkeysValueArgs := make([]any, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
+	uidsValueStrings := make([]string, 0, uidsInBunch)
+	uidsValueArgs := make([]any, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
+	return &sqlBunch{
+		keysValueStrings:    keysValueStrings,
+		keysValueArgs:       keysValueArgs,
+		subkeysValueStrings: subkeysValueStrings,
+		subkeysValueArgs:    subkeysValueArgs,
+		uidsValueStrings:    uidsValueStrings,
+		uidsValueArgs:       uidsValueArgs,
+	}
+}
+
+// sqlBunch.append() appends the *Docs associated with a single key to a bunch of SQL arguments.
+// It does nothing and returns false if appending would have exceeded any of the bunch limits.
+func (b *sqlBunch) append(keyDoc *types.KeyDoc, subKeyDocs []types.SubKeyDoc, uidDocs []types.UserIdDoc) (ok bool) {
+	lenSKIA := len(subKeyDocs)
+	lenUIA := len(uidDocs)
+	totKeyArgs := b.totKeyArgs + keysNumColumns
+	totSubkeyArgs := b.totSubkeyArgs + subkeysNumColumns*lenSKIA
+	totUidArgs := b.totUidArgs + useridsNumColumns*lenUIA
+	if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) || (totUidArgs > uidsInBunch*useridsNumColumns) {
+		return false
+	}
+	b.totKeyArgs, b.totSubkeyArgs, b.totUidArgs = totKeyArgs, totSubkeyArgs, totUidArgs
+	b.keysValueStrings = append(b.keysValueStrings,
+		fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
+			b.i*keysNumColumns+1, b.i*keysNumColumns+2, b.i*keysNumColumns+3, b.i*keysNumColumns+4, b.i*keysNumColumns+5, b.i*keysNumColumns+6, b.i*keysNumColumns+7, b.i*keysNumColumns+8))
+	insTime := time.Now().UTC()
+	b.keysValueArgs = append(b.keysValueArgs, keyDoc.RFingerprint, keyDoc.Doc,
+		insTime, insTime, insTime, keyDoc.MD5, keyDoc.Keywords, keyDoc.VFingerprint)
+	b.i++
+
+	for sidx := 0; sidx < lenSKIA; sidx, b.j = sidx+1, b.j+1 {
+		b.subkeysValueStrings = append(b.subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)",
+			b.j*subkeysNumColumns+1, b.j*subkeysNumColumns+2, b.j*subkeysNumColumns+3))
+		b.subkeysValueArgs = append(b.subkeysValueArgs,
+			subKeyDocs[sidx].RFingerprint, subKeyDocs[sidx].RSubKeyFp, subKeyDocs[sidx].VSubKeyFp)
+	}
+	for uidx := 0; uidx < lenUIA; uidx, b.k = uidx+1, b.k+1 {
+		b.uidsValueStrings = append(b.uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)",
+			b.k*useridsNumColumns+1, b.k*useridsNumColumns+2, b.k*useridsNumColumns+3, b.k*useridsNumColumns+4))
+		b.uidsValueArgs = append(b.uidsValueArgs,
+			uidDocs[uidx].RFingerprint, uidDocs[uidx].UidString, uidDocs[uidx].Identity, uidDocs[uidx].Confidence)
 	}
 	return true
 }
 
 // bulkInsertSend copies the constructed database rows to the postgres in-memory tables
-func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings []string, keysValueArgs, subkeysValueArgs, uidsValueArgs []interface{}, result *hkpstorage.InsertError) (ok bool) {
+// Copyin tables are TRUNCATEd inside the transaction instead of DROPping them between transactions, which is racy
+func (bs *bulkSession) bulkInsertSend(bunch *sqlBunch, result *hkpstorage.InsertError) (ok bool) {
 	// Send all keys to in-mem tables to the pg server; *no constraints checked*
 	keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, doc, ctime, mtime, idxtime, md5, keywords, vfingerprint) VALUES %s",
-		keys_copyin_temp_table_name, strings.Join(keysValueStrings, ","))
-	err := st.bulkInsertSendBunchTx(keystmt, "INSERT INTO "+keys_copyin_temp_table_name, keysValueArgs)
+		keys_copyin_temp_table_name, strings.Join(bunch.keysValueStrings, ","))
+	err := bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinKeys, keystmt},
+		"INSERT INTO "+keys_copyin_temp_table_name,
+		[][]any{{}, bunch.keysValueArgs})
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not send key bunch: %v", err)
 		return false
 	}
 
-	if len(subkeysValueArgs) > 0 {
+	if len(bunch.subkeysValueArgs) > 0 {
 		// Send all subkeys to in-mem tables to the pg server; *no constraints checked*
 		subkeystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, rsubfp, vsubfp) VALUES %s",
-			subkeys_copyin_temp_table_name, strings.Join(subkeysValueStrings, ","))
-		err = st.bulkInsertSendBunchTx(subkeystmt, "INSERT INTO "+subkeys_copyin_temp_table_name, subkeysValueArgs)
+			subkeys_copyin_temp_table_name, strings.Join(bunch.subkeysValueStrings, ","))
+		err = bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinSubkeys, subkeystmt},
+			"INSERT INTO "+subkeys_copyin_temp_table_name,
+			[][]any{{}, bunch.subkeysValueArgs})
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not send subkey bunch: %v", err)
@@ -421,11 +479,13 @@ func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsVal
 		}
 	}
 
-	if len(uidsValueArgs) > 0 {
+	if len(bunch.uidsValueArgs) > 0 {
 		// Send all userids to in-mem tables to the pg server; *no constraints checked*
 		useridstmt := fmt.Sprintf("INSERT INTO %s (rfingerprint, uidstring, identity, confidence) VALUES %s",
-			userids_copyin_temp_table_name, strings.Join(uidsValueStrings, ","))
-		err = st.bulkInsertSendBunchTx(useridstmt, "INSERT INTO "+userids_copyin_temp_table_name, uidsValueArgs)
+			userids_copyin_temp_table_name, strings.Join(bunch.uidsValueStrings, ","))
+		err = bs.bulkInsertSendBunchTx([]string{bulkTxCleanCopyinUserIDs, useridstmt},
+			"INSERT INTO "+userids_copyin_temp_table_name,
+			[][]any{{}, bunch.uidsValueArgs})
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not send userid bunch: %v", err)
@@ -436,9 +496,9 @@ func (st *storage) bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsVal
 	return true
 }
 
-func (st *storage) bulkInsertCopyOld(oldKeys []string, result *hkpstorage.InsertError) (ok bool) {
+func (bs *bulkSession) bulkInsertCopyOld(oldKeys []string, result *hkpstorage.InsertError) (ok bool) {
 	keysValueStrings := make([]string, 0, keysInBunch)
-	keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
+	keysValueArgs := make([]any, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
 	for index, fp := range oldKeys {
 		keysValueStrings = append(keysValueStrings, fmt.Sprintf("($%d::TEXT)", index+1))
 		keysValueArgs = append(keysValueArgs, openpgp.Reverse(fp))
@@ -448,7 +508,9 @@ func (st *storage) bulkInsertCopyOld(oldKeys []string, result *hkpstorage.Insert
 
 	keystmt := fmt.Sprintf("INSERT INTO %s (rfingerprint) VALUES %s",
 		keys_old_temp_table_name, strings.Join(keysValueStrings, ","))
-	err := st.bulkInsertSendBunchTx(keystmt, "keys", keysValueArgs)
+	err := bs.bulkInsertSendBunchTx([]string{bulkTxCleanOldKeys, keystmt},
+		"INSERT INTO "+keys_old_temp_table_name,
+		[][]any{{}, keysValueArgs})
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not send old key bunch: %v", err)
@@ -457,11 +519,11 @@ func (st *storage) bulkInsertCopyOld(oldKeys []string, result *hkpstorage.Insert
 	return true
 }
 
-func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError) (int, bool) {
+func (bs *bulkSession) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError) (int, bool) {
 	var key *openpgp.PrimaryKey
-	keyInsArgs := make([]keyInsertArgs, 0, len(keys))
-	skeyInsArgs := make([][]subkeyInsertArgs, 0, len(keys))
-	uidInsArgs := make([][]uidInsertArgs, 0, len(keys))
+	keyDocs := make([]types.KeyDoc, 0, len(keys))
+	subKeyDocs := make([][]types.SubKeyDoc, 0, len(keys))
+	uidDocs := make([][]types.UserIdDoc, 0, len(keys))
 	jsonStrs, theKeywords, uids := make([]string, len(keys)), make([]string, len(keys)), make([][]types.UserIdDoc, len(keys))
 
 	unprocessed, sidx, uidx, i := 0, 0, 0, 0
@@ -478,76 +540,78 @@ func (st *storage) bulkInsertCopyKeysToServer(keys []*openpgp.PrimaryKey, result
 		}
 		jsonStrs[i] = string(jsonBuf)
 		theKeywords[i], uids[i] = types.KeywordsTSVector(key)
-		keyInsArgs = keyInsArgs[:i+1] // re-slice +1
-		keyInsArgs[i] = keyInsertArgs{&key.RFingerprint, &jsonStrs[i], &key.MD5, &theKeywords[i], &key.VFingerprint}
+		keyDocs = keyDocs[:i+1] // re-slice +1
+		keyDocs[i] = types.KeyDoc{RFingerprint: key.RFingerprint,
+			VFingerprint: key.VFingerprint, MD5: key.MD5, Doc: jsonStrs[i], Keywords: theKeywords[i]}
 
-		skeyInsArgs = skeyInsArgs[:i+1] // re-slice +1
-		skeyInsArgs[i] = make([]subkeyInsertArgs, 0, len(key.SubKeys))
+		subKeyDocs = subKeyDocs[:i+1] // re-slice +1
+		subKeyDocs[i] = make([]types.SubKeyDoc, 0, len(key.SubKeys))
 		for sidx = 0; sidx < len(key.SubKeys); sidx++ {
-			skeyInsArgs[i] = skeyInsArgs[i][:sidx+1] // re-slice +1
-			skeyInsArgs[i][sidx] = subkeyInsertArgs{&key.RFingerprint, &key.SubKeys[sidx].RFingerprint, &key.SubKeys[sidx].VFingerprint}
+			subKeyDocs[i] = subKeyDocs[i][:sidx+1] // re-slice +1
+			subKeyDocs[i][sidx] = types.SubKeyDoc{RFingerprint: key.RFingerprint,
+				RSubKeyFp: key.SubKeys[sidx].RFingerprint, VSubKeyFp: key.SubKeys[sidx].VFingerprint}
 		}
-		uidInsArgs = uidInsArgs[:i+1] // re-slice +1
-		uidInsArgs[i] = make([]uidInsertArgs, 0, len(uids[i]))
+		uidDocs = uidDocs[:i+1] // re-slice +1
+		uidDocs[i] = make([]types.UserIdDoc, 0, len(uids[i]))
 		for uidx = 0; uidx < len(uids[i]); uidx++ {
-			uidInsArgs[i] = uidInsArgs[i][:uidx+1] // re-slice +1
-			uidInsArgs[i][uidx] = uidInsertArgs{&key.RFingerprint, &uids[i][uidx].UidString, &uids[i][uidx].Identity, &uids[i][uidx].Confidence}
+			uidDocs[i] = uidDocs[i][:uidx+1] // re-slice +1
+			uidDocs[i][uidx] = types.UserIdDoc{RFingerprint: key.RFingerprint,
+				UidString: uids[i][uidx].UidString, Identity: uids[i][uidx].Identity, Confidence: uids[i][uidx].Confidence}
 		}
 		i++
 	}
-	ok := st.bulkInsertDoCopy(keyInsArgs, skeyInsArgs, uidInsArgs, result)
+	ok := bs.bulkInsertDoCopy(keyDocs, subKeyDocs, uidDocs, result)
 	return unprocessed, ok
 }
 
-func (st *storage) bulkDropTempTables() error {
+// bulkDrepTempTables cleans up the temporary (in-mem) tables for bulk actions.
+func (bs *bulkSession) bulkDropTempTables() error {
+	defer bs.Close()
 	// Drop the 2 pairs (all) of temporary tables
-	err := st.bulkExecSingleTx(drTempTablesSQL, []string{"dr-temp-tables"})
+	err := bs.bulkExecSingleTx(drTempTablesSQL, []string{"dr-temp-tables"})
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	return nil
 }
 
-func (st *storage) bulkCreateTempTables() error {
-	err := st.bulkExecSingleTx(crTempTablesSQL, []string{"cr-temp-tables"})
+// bulkCreateTempTables creates the necessary _temporary_ (in-mem) tables for bulk actions.
+// On success, the calling routine MUST immediately defer bulkDropTempTables.
+func (st *storage) bulkCreateTempTables() (bs *bulkSession, err error) {
+	bs, err = st.newBulkSession()
 	if err != nil {
-		return errors.Wrap(err, "cannot create temporary tables")
+		return nil, errors.Wrap(err, "cannot create bulk session")
 	}
-	return nil
+	err = bs.bulkExecSingleTx(crTempTablesSQL, []string{"cr-temp-tables"})
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot create temporary tables")
+	}
+	return bs, nil
 }
 
 // bulkInsert inserts the given keys, and stores any errors in `result`
 // If `oldKeys` is a non-empty list of fingerprints, any keys in it but not in `keys` will be deleted.
-func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError, oldKeys []string) (keysInserted, keysDeleted int, ok bool) {
+// The caller MUST invoke bulkCreateTempTables and defer bulkDropTempTables
+// (preferably outside the batch-handling loop) BEFORE calling bulkInsert.
+func (bs *bulkSession) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.InsertError, oldKeys []string) (keysInserted, keysDeleted int, ok bool) {
 	log.Infof("inserting batch of %d keys", len(keys))
 	t := time.Now() // FIXME: Remove this
-	// Create 2 sets of _temporary_ (in-mem) tables:
-	// (a) keys_copyin, subkeys_copyin, userids_copyin
-	// (b) keys_checked, subkeys_checked, userids_checked
-	err := st.bulkCreateTempTables()
-	if err != nil {
-		// This should always be possible (maybe, out-of-memory?)
-		result.Errors = append(result.Errors, err)
-		log.Warnf("could not create temp tables: %v", err)
-		return 0, 0, false
-	}
-	defer st.bulkDropTempTables()
 	var keysWithNulls, subkeysWithNulls, useridsWithNulls, maxDups, minDups, subkeysInserted, useridsInserted int
 	// (a): Send *all* keys to in-mem tables on the pg server; *no constraints checked*
-	if _, ok = st.bulkInsertCopyKeysToServer(keys, result); !ok {
+	if _, ok = bs.bulkInsertCopyKeysToServer(keys, result); !ok {
 		return 0, 0, false
 	}
 	if len(oldKeys) != 0 {
-		if !st.bulkInsertCopyOld(oldKeys, result) {
+		if !bs.bulkInsertCopyOld(oldKeys, result) {
 			return 0, 0, false
 		}
 		// (b): From _copyin tables update existing on-disk records
 		//      remove duplicates, check supplementary table constraints only, not `keys`
-		if subkeysWithNulls, useridsWithNulls, ok = st.bulkReloadFromCopyinTables(result); !ok {
+		if subkeysWithNulls, useridsWithNulls, ok = bs.bulkReloadFromCopyinTables(result); !ok {
 			return 0, 0, false
 		}
-		keysInserted, subkeysInserted, useridsInserted, keysDeleted = st.bulkReloadGetStats(result)
-		err = st.BulkNotify(bulkUpdQueryKeyAdded, bulkUpdQueryKeyRemoved)
+		keysInserted, subkeysInserted, useridsInserted, keysDeleted = bs.bulkReloadGetStats(result)
+		err := bs.BulkNotify(bulkUpdQueryKeyAdded, bulkUpdQueryKeyRemoved)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not bulk notify insertion/deletion: %v", err)
@@ -555,11 +619,11 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 	} else {
 		// (b): From _copyin tables insert new on-disk records
 		//      remove duplicates, check *all* constraints & RollBack insertions that err
-		if keysWithNulls, subkeysWithNulls, useridsWithNulls, ok = st.bulkInsertFromCopyinTables(result); !ok {
+		if keysWithNulls, subkeysWithNulls, useridsWithNulls, ok = bs.bulkInsertFromCopyinTables(result); !ok {
 			return 0, 0, false
 		}
-		maxDups, minDups, keysInserted, subkeysInserted, useridsInserted = st.bulkInsertGetStats(result)
-		err = st.BulkNotify(bulkInsQueryKeyChange)
+		maxDups, minDups, keysInserted, subkeysInserted, useridsInserted = bs.bulkInsertGetStats(result)
+		err := bs.BulkNotify(bulkInsQueryKeyChange)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Warnf("could not bulk notify insertion: %v", err)
@@ -575,85 +639,46 @@ func (st *storage) bulkInsert(keys []*openpgp.PrimaryKey, result *hkpstorage.Ins
 			keysInserted, subkeysInserted, useridsInserted, keysDeleted, minDups, maxDups, keysWithNulls, subkeysWithNulls, useridsWithNulls, time.Since(t))
 	}
 
-	err = st.bulkDropTempTables()
-	if err != nil {
-		// Temporary tables with previous data may lead to errors,
-		// when attempting insertion of duplicates, in next file,
-		// but may be resolved for the subsequent file(s)
-		result.Errors = append(result.Errors, err)
-		log.Warnf("could not drop temp tables: %v", err)
-	}
 	// FIXME: Imitate returning duplicates for reporting. Can be removed.
 	result.Duplicates = make([]*openpgp.PrimaryKey, minDups)
 	return keysInserted, keysDeleted, true
 }
 
 // bulkReindexDoCopy insert keys, subkeys, userids to in-mem tables with no constraints at all: should have no errors!
-// TODO: this duplicates a lot of code from bulkInsertDoCopy; find a DRYer way
-func (st *storage) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
+func (bs *bulkSession) bulkReindexDoCopy(keyDocs iter.Seq[*types.KeyDoc], result *hkpstorage.InsertError) bool {
 	keyDocsPull, keyDocsPullStop := iter.Pull(keyDocs)
 	defer keyDocsPullStop()
 	pullOk := true
 	var kd *types.KeyDoc
-	for idx, lastIdx := 0, 0; pullOk; lastIdx = idx {
-		totKeyArgs, totSubkeyArgs, totUidArgs := 0, 0, 0
-		keysValueStrings := make([]string, 0, keysInBunch)
-		keysValueArgs := make([]interface{}, 0, keysInBunch*keysNumColumns) // *** must be less than 64k arguments ***
-		subkeysValueStrings := make([]string, 0, subkeysInBunch)
-		subkeysValueArgs := make([]interface{}, 0, subkeysInBunch*subkeysNumColumns) // *** must be less than 64k arguments ***
-		subkeysDocs := make([][]types.SubKeyDoc, uidsInBunch)
-		uidsValueStrings := make([]string, 0, uidsInBunch)
-		uidsValueArgs := make([]interface{}, 0, uidsInBunch*useridsNumColumns) // *** must be less than 64k arguments ***
+	for idx := 0; pullOk; {
+		bunch := newSqlBunch()
+		subKeyDocs := make([][]types.SubKeyDoc, subkeysInBunch)
 		uidDocs := make([][]types.UserIdDoc, uidsInBunch)
 		kd, pullOk = keyDocsPull()
 		if !pullOk {
 			return true
 		}
-		for i, j, k := 0, 0, 0; pullOk; idx, i = idx+1, i+1 {
-			subkeysDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
-			lenSKIA := len(subkeysDocs[idx])
-			lenUIA := len(uidDocs[idx])
-			totKeyArgs += keysNumColumns
-			totSubkeyArgs += subkeysNumColumns * lenSKIA
-			totUidArgs += useridsNumColumns * lenUIA
-			if (totKeyArgs > keysInBunch*keysNumColumns) || (totSubkeyArgs > subkeysInBunch*subkeysNumColumns) {
-				totKeyArgs -= keysNumColumns
-				totSubkeyArgs -= subkeysNumColumns * lenSKIA
+		for ; pullOk; idx = idx + 1 {
+			subKeyDocs[idx], uidDocs[idx], _, _ = kd.Refresh() // ignore errors
+			kd.Doc = "{}"                                      // don't re-upload the whole Doc when reindexing
+			if !bunch.append(kd, subKeyDocs[idx], uidDocs[idx]) {
 				break
-			}
-			keysValueStrings = append(keysValueStrings,
-				fmt.Sprintf("($%d::TEXT, $%d::JSONB, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TIMESTAMP, $%d::TEXT, $%d::TSVECTOR, $%d::TEXT)",
-					i*keysNumColumns+1, i*keysNumColumns+2, i*keysNumColumns+3, i*keysNumColumns+4, i*keysNumColumns+5, i*keysNumColumns+6, i*keysNumColumns+7, i*keysNumColumns+8))
-			insTime := time.Now().UTC()
-			keysValueArgs = append(keysValueArgs, kd.RFingerprint, "{}",
-				insTime, insTime, insTime, kd.MD5, kd.Keywords, kd.VFingerprint)
-
-			for sidx := 0; sidx < lenSKIA; sidx, j = sidx+1, j+1 {
-				subkeysValueStrings = append(subkeysValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT)", j*subkeysNumColumns+1, j*subkeysNumColumns+2, j*subkeysNumColumns+3))
-				subkeysValueArgs = append(subkeysValueArgs,
-					subkeysDocs[idx][sidx].RFingerprint, subkeysDocs[idx][sidx].RSubKeyFp, subkeysDocs[idx][sidx].VSubKeyFp)
-			}
-			for uidx := 0; uidx < lenUIA; uidx, k = uidx+1, k+1 {
-				uidsValueStrings = append(uidsValueStrings, fmt.Sprintf("($%d::TEXT, $%d::TEXT, $%d::TEXT, $%d::INTEGER)", k*useridsNumColumns+1, k*useridsNumColumns+2, k*useridsNumColumns+3, k*useridsNumColumns+4))
-				uidsValueArgs = append(uidsValueArgs,
-					uidDocs[idx][uidx].RFingerprint, uidDocs[idx][uidx].UidString, uidDocs[idx][uidx].Identity, uidDocs[idx][uidx].Confidence)
 			}
 			kd, pullOk = keyDocsPull()
 		}
-
-		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
-		ok := st.bulkInsertSend(keysValueStrings, subkeysValueStrings, uidsValueStrings, keysValueArgs, subkeysValueArgs, uidsValueArgs, result)
+		log.Debugf("attempting bulk insertion of %d keys, %d subkeys, %d userids", bunch.i, bunch.j, bunch.k)
+		ok := bs.bulkInsertSend(bunch, result)
 		if !ok {
 			return false
 		}
-		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", idx-lastIdx, totSubkeyArgs/subkeysNumColumns, totUidArgs/useridsNumColumns)
+		log.Debugf("%d keys, %d subkeys, %d userids sent to DB...", bunch.i, bunch.j, bunch.k)
 	}
 	return true
 }
 
-func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
+func (bs *bulkSession) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 	var keysReindexed int
-	err := st.QueryRow(bulkCopiedKeysNum).Scan(&keysReindexed)
+	err := bs.conn.QueryRowContext(bs.ctx, bulkCopiedKeysNum).Scan(&keysReindexed)
 	if err != nil {
 		result.Errors = append(result.Errors, err)
 		log.Warnf("could not update reindex stats: %v", err)
@@ -662,14 +687,14 @@ func (st *storage) bulkReindexGetStats(result *hkpstorage.InsertError) int {
 	return keysReindexed
 }
 
-func (st *storage) bulkReindexFromCopyinTables(result *hkpstorage.InsertError) bool {
+func (bs *bulkSession) bulkReindexFromCopyinTables(result *hkpstorage.InsertError) bool {
 	subkeysOK, useridsOK := true, true
 	// subkey batch-processing
-	if _, subkeysOK = st.bulkInsertCheckSubkeys(result); !subkeysOK {
+	if _, subkeysOK = bs.bulkInsertCheckSubkeys(result); !subkeysOK {
 		return false
 	}
 	// userid batch-processing
-	if _, useridsOK = st.bulkInsertCheckUserIDs(result); !useridsOK {
+	if _, useridsOK = bs.bulkInsertCheckUserIDs(result); !useridsOK {
 		return false
 	}
 
@@ -678,24 +703,24 @@ func (st *storage) bulkReindexFromCopyinTables(result *hkpstorage.InsertError) b
 		// update each table on disk separately, and fail fast to see which transaction failed
 		// write to the keys table last, so that reindex will retry on the next pass
 		txStrs := []string{bulkTxInsertSubkeys, bulkTxReindexSubkeys}
-		msgStrs := []string{"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys"}
-		err := st.bulkExecSingleTx(txStrs, msgStrs)
+		msgStrs := []string{"bulkTxInsertSubkeys", "bulkTxReindexSubkeys"}
+		err := bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex subkeys: %v", err)
 			result.Errors = append(result.Errors, err)
 			return false
 		}
 		txStrs = []string{bulkTxInsertUserIDs, bulkTxReindexUserIDs}
-		msgStrs = []string{"bulkTx-insert-userids", "bulk-Tx-reindex-userids"}
-		err = st.bulkExecSingleTx(txStrs, msgStrs)
+		msgStrs = []string{"bulkTxInsertUserIDs", "bulkTxReindexUserIDs"}
+		err = bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex userids: %v", err)
 			result.Errors = append(result.Errors, err)
 			return false
 		}
 		txStrs = []string{bulkTxReindexKeys}
-		msgStrs = []string{"bulkTx-reindex-keys"}
-		err = st.bulkExecSingleTx(txStrs, msgStrs)
+		msgStrs = []string{"bulkTxReindexKeys"}
+		err = bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex keys: %v", err)
 			result.Errors = append(result.Errors, err)
@@ -709,11 +734,11 @@ func (st *storage) bulkReindexFromCopyinTables(result *hkpstorage.InsertError) b
 			bulkTxReindexKeys,
 		}
 		msgStrs := []string{
-			"bulkTx-insert-subkeys", "bulkTx-reindex-subkeys",
-			"bulkTx-insert-userids", "bulk-Tx-reindex-userids",
-			"bulkTx-reindex-keys",
+			"bulkTxClearDupSubkeys", "bulkTxInsertSubkeys", "bulkTxReindexSubkeys",
+			"bulkTxClearDupUserIDs", "bulkTxInsertUserIDs", "bulkTxReindexUserIDs",
+			"bulkTxReindexKeys",
 		}
-		err := st.bulkExecSingleTx(txStrs, msgStrs)
+		err := bs.bulkExecSingleTx(txStrs, msgStrs)
 		if err != nil {
 			log.Warnf("could not reindex: %v", err)
 			result.Errors = append(result.Errors, err)
@@ -723,26 +748,19 @@ func (st *storage) bulkReindexFromCopyinTables(result *hkpstorage.InsertError) b
 	return true
 }
 
-func (st *storage) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
+// bulkReindex reindexes a batch of keys in a small number of transactions.
+// The caller MUST invoke bulkCreateTempTables and defer bulkDropTempTables
+// (preferably outside the batch-handling loop) BEFORE calling bulkReindex.
+func (bs *bulkSession) bulkReindex(keyDocs map[string]*types.KeyDoc, result *hkpstorage.InsertError) (int, bool) {
 	log.Infof("reindexing batch of %d keys", len(keyDocs))
-	err := st.bulkCreateTempTables()
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-		return 0, false
-	}
-	defer st.bulkDropTempTables()
 	keysReindexed := 0
-	if !st.bulkReindexDoCopy(maps.Values(keyDocs), result) {
+	if !bs.bulkReindexDoCopy(maps.Values(keyDocs), result) {
 		return 0, false
 	}
-	if !st.bulkReindexFromCopyinTables(result) {
+	if !bs.bulkReindexFromCopyinTables(result) {
 		return 0, false
 	}
 
-	keysReindexed = st.bulkReindexGetStats(result)
-	err = st.bulkDropTempTables()
-	if err != nil {
-		result.Errors = append(result.Errors, err)
-	}
+	keysReindexed = bs.bulkReindexGetStats(result)
 	return keysReindexed, true
 }

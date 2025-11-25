@@ -197,7 +197,12 @@ func sqlDesc(in []string) (out []string) {
 }
 
 func (st *storage) createTables() error {
-	err := st.bulkExecSingleTx(crTablesSQL, sqlDesc(crTablesSQL))
+	bs, err := st.newBulkSession()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer bs.Close()
+	err = bs.bulkExecSingleTx(crTablesSQL, sqlDesc(crTablesSQL))
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -205,7 +210,12 @@ func (st *storage) createTables() error {
 }
 
 func (st *storage) createIndexes() error {
-	err := st.bulkExecSingleTx(crIndexesSQL, sqlDesc(crIndexesSQL))
+	bs, err := st.newBulkSession()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer bs.Close()
+	err = bs.bulkExecSingleTx(crIndexesSQL, sqlDesc(crIndexesSQL))
 	if err != nil {
 		return errors.WithStack(err)
 	}

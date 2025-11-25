@@ -77,10 +77,19 @@ func (st *storage) refreshBunch(bookmark *time.Time, newKeyDocs map[string]*type
 // It always returns nil, as reindex failure is not fatal.
 func (st *storage) Reindex() error {
 	bookmark := time.Time{}
+	savedBookmark := bookmark
 	newKeyDocs := make(map[string]*types.KeyDoc, keysInBunch)
 	result := hkpstorage.InsertError{}
-	total := 0
+	total, subTotal := 0, 0
+	try, maxTries := 1, 2
 	log.Infof("reindexing scan starting...")
+
+	bs, err := st.bulkCreateTempTables()
+	if err != nil {
+		log.Warnf("could not create temp tables: %v", err)
+		return err
+	}
+	defer bs.bulkDropTempTables()
 
 	for {
 		select {
@@ -91,18 +100,30 @@ func (st *storage) Reindex() error {
 
 		t := time.Now()
 		count, finished := st.refreshBunch(&bookmark, newKeyDocs, &result)
-		total += count
+		subTotal += count
 		if finished && len(newKeyDocs) != 0 || len(newKeyDocs) > keysInBunch-100 {
-			n, bulkOK := st.bulkReindex(newKeyDocs, &result)
+			n, bulkOK := bs.bulkReindex(newKeyDocs, &result)
 			if !bulkOK {
 				log.Debugf("bulkReindex not ok: %q", result.Errors)
-				if count, max := len(result.Errors), maxInsertErrors; count > max {
-					log.Errorf("too many reindexing errors (%d > %d), bailing...", count, max)
+				if count := len(result.Errors); count > maxInsertErrors {
+					log.Errorf("too many reindexing errors (%d > %d), bailing...", count, maxInsertErrors)
 					return nil
 				}
+				if try < maxTries {
+					try++
+					subTotal = 0
+					newKeyDocs = make(map[string]*types.KeyDoc, keysInBunch)
+					bookmark = savedBookmark
+					log.Debugf("retrying reindex batch... %d tries remaining", maxTries-try)
+					continue
+				}
 			}
-			log.Infof("%d keys reindexed in %v; total scanned %d", n, time.Since(t), total)
+			try = 1
+			total += subTotal
+			subTotal = 0
 			newKeyDocs = make(map[string]*types.KeyDoc, keysInBunch)
+			savedBookmark = bookmark
+			log.Infof("%d keys reindexed in %v on try %d; total scanned %d", n, time.Since(t), try, total)
 		}
 		if finished {
 			log.Infof("reindexing complete")
