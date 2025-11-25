@@ -186,12 +186,12 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 	bulkOK, bulkSkip := false, false
 	if len(keys) >= minKeys2UseBulk {
 		// Attempt bulk insertion
-		err := st.bulkCreateTempTables()
+		bs, err := st.bulkCreateTempTables()
 		if err != nil {
 			log.Warnf("could not create temp tables: %v", err)
 		} else {
-			defer st.bulkDropTempTables()
-			n, _, bulkOK = st.bulkInsert(keys, &result, []string{})
+			defer bs.bulkDropTempTables()
+			n, _, bulkOK = bs.bulkInsert(keys, &result, []string{})
 		}
 	} else {
 		bulkSkip = true

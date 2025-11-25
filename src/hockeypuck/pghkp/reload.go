@@ -137,12 +137,12 @@ func (st *storage) Reload() (totalUpdated, totalDeleted int, _ error) {
 	newRecords := make([]*hkpstorage.Record, 0, keysInBunch)
 	result := hkpstorage.InsertError{}
 
-	err := st.bulkCreateTempTables()
+	bs, err := st.bulkCreateTempTables()
 	if err != nil {
 		log.Errorf("could not create temp tables: %v", err)
 		return 0, 0, err
 	}
-	defer st.bulkDropTempTables()
+	defer bs.bulkDropTempTables()
 
 	for {
 		t := time.Now()
@@ -150,7 +150,7 @@ func (st *storage) Reload() (totalUpdated, totalDeleted int, _ error) {
 		if finished || len(newRecords) > keysInBunch-100 {
 			// bulkInsert expects keys, not records
 			newKeys, oldKeys := validateRecords(newRecords)
-			n, d, bulkOK := st.bulkInsert(newKeys, &result, oldKeys)
+			n, d, bulkOK := bs.bulkInsert(newKeys, &result, oldKeys)
 			if !bulkOK {
 				log.Debugf("bulkInsert not ok: %q", result.Errors)
 				log.Infof("bulk reload failed; reverting to normal insertion")
