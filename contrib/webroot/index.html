@@ -63,6 +63,10 @@
                     <span class="glyphicon glyphicon-cloud-upload"></span>
                     Submit Key
                   </a>
+                  <a id="showDeleteFormBtn" type="button" class="btn btn-primary" data-toggle="modal" href="#deleteInfo">
+                    <span class="glyphicon glyphicon-remove"></span>
+                    Delete Info
+                  </a>
                 </div>
               </div>
               <details class="text-center" style="margin-top: 0.5em;">
@@ -139,7 +143,42 @@
           </div>
         </div>
       </div>
-      <div class="modal" id="about" tabindex="-1" role="dialog" aria-labelledby="AboutLabel" aria-hidden="true">
+      <div class="modal" id="deleteInfo" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h4 class="modal-title" id="myModalLabel">Delete Your Information</h4>
+            </div>
+            <div class="modal-body">
+              <p>You can delete the User ID information from your public key by uploading its <b>revocation certificate</b> below.
+                This will also make your public key unusable by anyone who attempts to download it from this keyserver or any of its partners.
+              </p>
+              <p>(If you generated your key using GnuPG, there may already be a revocation certificate in the <code>~/.gnupg/openpgp-revocs.d</code> directory on your computer)</p>
+              <p>When generating a new revocation certificate, be sure to select "no reason" or "key is compromised" if prompted to give a reason for revocation.
+                Other answers to this question may not result in information deletion.
+                If you make a mistake, you can generate a new revocation certificate with a different reason.
+              </p>
+              <p>If you do not have a revocation certificate, and cannot generate a new one,
+                please contact the site owner for assistance using the contact information on the <a href="/pks/stats">stats page</a>.
+              </p>
+              <form action="/pks/add" method="post" id="keySubmitForm">
+                <div class="control-group">
+                  <div class="controls">
+                    <textarea id="textarea" name="keytext" rows="20" style="width: 100%;font-family:Courier;font-size:12px;" placeholder="Enter your ASCII-armored revocation certificate here" required ></textarea>
+                  </div>
+                </div>
+                <div class="modal-footer">
+                  <a href="#" type="button" class="btn btn-default" data-dismiss="modal">Close</a>
+                  <button type="submit" class="btn btn-primary">
+                    <span class="glyphicon glyphicon-cloud-upload"></span>
+                    Submit Revocation Certificate
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>      <div class="modal" id="about" tabindex="-1" role="dialog" aria-labelledby="AboutLabel" aria-hidden="true">
         <div class="modal-dialog">
           <div class="modal-content">
 
@@ -150,7 +189,7 @@
             <div class="modal-body">
               <p>This is an <a href="https://en.wikipedia.org/wiki/Key_server_%28cryptographic%29" target="_blank">OpenPGP keyserver</a>.</p>
               <p>It is provided to the community as a public service to help distribute OpenPGP public keys.</p>
-              <p>Queries about the operation of this service should be directed to the server contact listed on the <a href="/pks/lookup?op=stats">statistics page</a>.</p>
+              <p>Queries about the operation of this service should be directed to the server contact listed on the <a href="/pks/stats">stats page</a>.</p>
             </div>
 
             <div class="modal-header">
@@ -172,7 +211,7 @@
                 </dd>
               </dl></p>
               <p>
-                OpenPGP public keys and revocation certificates are synchronised with this server's peers, which are listed on the <a href="/pks/lookup?op=stats">statistics page</a>.
+                OpenPGP public keys and revocation certificates are synchronised with this server's peers, which are listed on the <a href="/pks/stats">stats page</a>.
                 Public keys may be gathered by direct submission to this server (either automatically via your OpenPGP client software or manually via the browser upload form), or indirectly from its peers.
               </p>
               <p>This server does not use cookies.</p>
@@ -214,7 +253,7 @@
         <div style="max-width: 20em; float: left;" >
           <p class="muted credit small">
             <a href="#about">about</a> |
-            <a href="/pks/lookup?op=stats">statistics</a>
+            <a href="/pks/stats">stats</a>
           </p>
         </div>
         <div style="float:right;">
