@@ -55,12 +55,12 @@ func (st *storage) Notify(change hkpstorage.KeyChange) error {
 // It takes one or two strings containing SQL queries, each of which SHOULD
 // return one value. The first query returns the md5 digests that were added,
 // and the second the md5s that were removed.
-func (st *storage) BulkNotify(sqlStrs ...string) error {
+func (bs *bulkSession) BulkNotify(sqlStrs ...string) error {
 	if len(sqlStrs) == 0 {
 		return nil
 	}
 	var md5sInserted, md5sRemoved []string
-	rows, err := st.Query(sqlStrs[0])
+	rows, err := bs.conn.QueryContext(bs.ctx, sqlStrs[0])
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -84,11 +84,11 @@ func (st *storage) BulkNotify(sqlStrs ...string) error {
 	}
 
 	if len(sqlStrs) == 1 {
-		st.Notify(hkpstorage.KeysBulkUpdated{Inserted: md5sInserted})
+		bs.st.Notify(hkpstorage.KeysBulkUpdated{Inserted: md5sInserted})
 		return nil
 	}
 	rows.Close()
-	rows, err = st.Query(sqlStrs[1])
+	rows, err = bs.conn.QueryContext(bs.ctx, sqlStrs[1])
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -110,10 +110,15 @@ func (st *storage) BulkNotify(sqlStrs ...string) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	st.Notify(hkpstorage.KeysBulkUpdated{Inserted: md5sInserted, Removed: md5sRemoved})
+	bs.st.Notify(hkpstorage.KeysBulkUpdated{Inserted: md5sInserted, Removed: md5sRemoved})
 	return nil
 }
 
 func (st *storage) RenotifyAll() error {
-	return st.BulkNotify("SELECT md5 FROM keys")
+	bs, err := st.newBulkSession()
+	if err != nil {
+		return err
+	}
+	defer bs.Close()
+	return bs.BulkNotify("SELECT md5 FROM keys")
 }

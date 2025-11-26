@@ -4,11 +4,13 @@ Hockeypuck is an OpenPGP public keyserver.
 
 ## Releases
 
-Hockeypuck uses semantic versioning and should always be installed from the latest release tag (or branch) for production use.
+Hockeypuck uses semantic versioning and should always be installed from the current release tag (or release branch) for production use.
+The `master` git branch and `latest` docker image should be considered alpha-quality, and may contain breaking changes.
+
+The current release branch is [2.2](https://github.com/hockeypuck/hockeypuck/tree/branch-2.2)
+
 If you wish to configure SKS peering, you should ensure that all peers are using the same minor version.
 Hockeypuck is not guaranteed to sync successfully between different minor versions.
-
-The current release branch is 2.2
 
 # Quick start with docker-compose (for testing)
 

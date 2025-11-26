@@ -48,10 +48,11 @@ type storage struct {
 
 var _ hkpstorage.Storage = (*storage)(nil)
 
-// These are necessary for array unrolling in the bulk update routines below.
+// These are necessary for array unrolling in the bulk update routines.
 // They MUST match the table definitions here.
-const keysNumColumns = 7
-const subkeysNumColumns = 2
+const keysNumColumns = 8
+const subkeysNumColumns = 3
+const useridsNumColumns = 4
 
 var crTablesSQL = []string{
 	// keys is always created with its initial six columns.
@@ -71,6 +72,10 @@ keywords tsvector
 TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00Z'`,
 	`ALTER TABLE keys ALTER idxtime
 DROP DEFAULT`,
+	`ALTER TABLE keys ADD IF NOT EXISTS vfingerprint
+TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE keys ALTER vfingerprint
+DROP DEFAULT`,
 	// subkeys is always created with its initial two columns.
 	// Additional columns should be defined using ALTER TABLE to enable seamless migration.
 	`CREATE TABLE IF NOT EXISTS subkeys
@@ -80,6 +85,26 @@ rsubfp TEXT NOT NULL PRIMARY KEY,
 FOREIGN KEY (rfingerprint) REFERENCES keys(rfingerprint)
 )
 `,
+	// For seamless migration, we use NOT NULL DEFAULT so that existing records get populated.
+	// Then we immediately DROP DEFAULT to force future records to be set explicitly.
+	`ALTER TABLE subkeys ADD IF NOT EXISTS vsubfp
+TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE subkeys ALTER vsubfp
+DROP DEFAULT`,
+	// userids is always created with its initial four columns.
+	// Additional columns should be defined using ALTER TABLE to enable seamless migration.
+	`CREATE TABLE IF NOT EXISTS userids
+(
+rfingerprint TEXT NOT NULL,
+uidstring TEXT NOT NULL,
+identity TEXT,
+confidence INTEGER NOT NULL,
+FOREIGN KEY (rfingerprint) REFERENCES keys(rfingerprint),
+PRIMARY KEY (rfingerprint, uidstring)
+)
+`,
+	// pks_status is always created with its initial three columns.
+	// Additional columns should be defined using ALTER TABLE to enable seamless migration.
 	`CREATE TABLE IF NOT EXISTS pks_status (
 	addr TEXT NOT NULL PRIMARY KEY,
 	last_sync TIMESTAMP WITH TIME ZONE,
@@ -91,6 +116,8 @@ FOREIGN KEY (rfingerprint) REFERENCES keys(rfingerprint)
 var crIndexesSQL = []string{
 	`CREATE INDEX IF NOT EXISTS keys_rfp
 ON keys(rfingerprint text_pattern_ops);`,
+	`CREATE INDEX IF NOT EXISTS keys_vfp
+ON keys(vfingerprint);`,
 	`CREATE INDEX IF NOT EXISTS keys_ctime
 ON keys(ctime);`,
 	`CREATE INDEX IF NOT EXISTS keys_mtime
@@ -99,12 +126,18 @@ ON keys(mtime);`,
 ON keys(idxtime);`,
 	`CREATE INDEX IF NOT EXISTS keys_keywords
 ON keys USING gin(keywords);`,
+
 	`CREATE INDEX IF NOT EXISTS subkeys_rfp
 ON subkeys(rsubfp text_pattern_ops);`,
+	`CREATE INDEX IF NOT EXISTS subkeys_vfp
+ON subkeys(vsubfp);`,
+
+	`CREATE INDEX IF NOT EXISTS userids_identity
+ON userids(identity text_pattern_ops);`,
 }
 
-// drConstraintsSQL is a list of SQL statements to drop constraints and indexes
-// TODO: Remove if not needed
+// TODO: these constraint names assume ancient postgres defaults and are not stable.
+// luckily drConstraintsSQL is never used... should we remove?
 var drConstraintsSQL = []string{
 	`ALTER TABLE keys DROP CONSTRAINT keys_pk;`,
 	`ALTER TABLE keys DROP CONSTRAINT keys_md5;`,
@@ -113,10 +146,17 @@ var drConstraintsSQL = []string{
 	`DROP INDEX keys_mtime;`,
 	`DROP INDEX keys_idxtime;`,
 	`DROP INDEX keys_keywords;`,
+	`DROP INDEX keys_vfp`,
 
 	`ALTER TABLE subkeys DROP CONSTRAINT subkeys_pk;`,
 	`ALTER TABLE subkeys DROP CONSTRAINT subkeys_fk;`,
+	`ALTER TABLE subkeys DROP CONSTRAINT subkeys_vsubfp;`,
 	`DROP INDEX subkeys_rfp;`,
+	`DROP INDEX subkeys_vfp`,
+
+	`ALTER TABLE userids DROP CONSTRAINT userids_pk;`,
+	`ALTER TABLE userids DROP CONSTRAINT userids_fk;`,
+	`DROP INDEX userids_identity;`,
 }
 
 // Dial returns PostgreSQL storage connected to the given database URL.
@@ -157,7 +197,12 @@ func sqlDesc(in []string) (out []string) {
 }
 
 func (st *storage) createTables() error {
-	err := st.bulkExecSingleTx(crTablesSQL, sqlDesc(crTablesSQL))
+	bs, err := st.newBulkSession()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer bs.Close()
+	err = bs.bulkExecSingleTx(crTablesSQL, sqlDesc(crTablesSQL))
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -165,7 +210,12 @@ func (st *storage) createTables() error {
 }
 
 func (st *storage) createIndexes() error {
-	err := st.bulkExecSingleTx(crIndexesSQL, sqlDesc(crIndexesSQL))
+	bs, err := st.newBulkSession()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer bs.Close()
+	err = bs.bulkExecSingleTx(crIndexesSQL, sqlDesc(crIndexesSQL))
 	if err != nil {
 		return errors.WithStack(err)
 	}

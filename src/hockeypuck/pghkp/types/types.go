@@ -36,15 +36,37 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// keyDoc is a nearly-raw copy of a row in the PostgreSQL `keys` table.
+// PostgreSQL size limits
+const (
+	lexemeLimit   = 2046    // 2KB - 2B for single lexeme
+	tsvectorLimit = 1048576 // 1MB for lexemes + positions
+)
+
+// KeyDoc is a nearly-raw copy of a row in the PostgreSQL `keys` table.
 type KeyDoc struct {
 	RFingerprint string
+	VFingerprint string
 	CTime        time.Time
 	MTime        time.Time
 	IdxTime      time.Time
 	MD5          string
 	Doc          string
 	Keywords     string
+}
+
+// SubKeyDoc is a raw copy of a row in the PostgreSQL `subkeys` table.
+type SubKeyDoc struct {
+	RFingerprint string
+	RSubKeyFp    string
+	VSubKeyFp    string
+}
+
+// UserIdDoc is a raw copy of a row in the PostgreSQL `userids` table.
+type UserIdDoc struct {
+	RFingerprint string
+	UidString    string
+	Identity     string
+	Confidence   int
 }
 
 func ReadOneKey(b []byte, rfingerprint string) (*openpgp.PrimaryKey, error) {
@@ -105,36 +127,46 @@ func keywordsFromTSVector(tsv string) (result []string) {
 	return
 }
 
-// keywordsFromKey returns slices of keyword tokens, email addresses, and UIDs
+// keywordsFromKey returns slices of keyword tokens, identities, and UIDs
 // extracted from the UserID packets of the given key.
 //
 // TODO: shouldn't this be a method on openpgp.PrimaryKey instead?
 // It's not specific to PostgreSQL, or even to storage.
-func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []string, uids []string) {
+//
+// TODO: currently this only recognises identities that look like email addresses.
+// We should allow for other forms of identity, such as URLs.
+func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []UserIdDoc) {
 	keywordMap := make(map[string]bool)
-	emailMap := make(map[string]bool)
-	uidMap := make(map[string]bool)
+	uiddocs = make([]UserIdDoc, 0, len(key.UserIDs))
 	for _, uid := range key.UserIDs {
+		if l := len(uid.Keywords); l >= lexemeLimit {
+			// ignore overlong userids, they're abusive
+			log.Warningf("userid packet on fp=%q exceeds limit (%d >= %d), ignoring: %v...", key.Fingerprint(), l, lexemeLimit, uid.Keywords[:32])
+			continue
+		}
+		uiddoc := UserIdDoc{}
+		// UidString must be unique, so store it case-sensitively
+		uiddoc.UidString = uid.Keywords
 		s := strings.ToLower(uid.Keywords)
 		// always include full text of UserID (lowercased)
 		keywordMap[s] = true
-		uidMap[s] = true
-		email := ""
+		uiddoc.RFingerprint = key.RFingerprint
+		identity := ""
 		commentary := s
 		lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
 		if lbr != -1 && rbr > lbr {
-			email = s[lbr+1 : rbr]
+			identity = s[lbr+1 : rbr]
 			commentary = s[:lbr]
 		} else {
-			email = s
+			identity = s
 			commentary = ""
 		}
 		// TODO: this still doesn't recognise all possible forms of UID :confounded:
-		if email != "" {
-			keywordMap[email] = true
-			emailMap[email] = true
-			parts := strings.SplitN(email, "@", 2)
+		if identity != "" {
+			keywordMap[identity] = true
+			parts := strings.SplitN(identity, "@", 2)
 			if len(parts) == 2 {
+				uiddoc.Identity = identity
 				keywordMap[parts[0]] = true
 				keywordMap[parts[1]] = true
 			}
@@ -150,6 +182,7 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []strin
 				}
 			}
 		}
+		uiddocs = append(uiddocs, uiddoc)
 	}
 	for k := range keywordMap {
 		// discard empty strings, low ASCII symbols, single digits, stop words
@@ -158,35 +191,23 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, emails []strin
 		}
 		keywords = append(keywords, k)
 	}
-	for k := range emailMap {
-		if k == "" {
-			continue
-		}
-		emails = append(emails, k)
-	}
-	for k := range uidMap {
-		if k == "" {
-			continue
-		}
-		uids = append(uids, k)
-	}
 	return
 }
 
-// keywordsFromSearch returns slices of keyword tokens and email addresses
+// keywordsFromSearch returns slices of keyword tokens and identities
 // extracted from the supplied search string.
 //
 // TODO: shouldn't this also be generic?
-func keywordsFromSearch(search string) (keywords []string, emails []string) {
+func keywordsFromSearch(search string) (keywords []string, identities []string) {
 	keywordMap := make(map[string]bool)
-	emailMap := make(map[string]bool)
+	identityMap := make(map[string]bool)
 	s := strings.ToLower(search)
-	email := s
+	identity := s
 	lbr, rbr := strings.Index(s, "<"), strings.LastIndex(s, ">")
 	if lbr != -1 && rbr > lbr {
-		email = s[lbr+1 : rbr]
-		keywordMap[email] = true
-		emailMap[email] = true
+		identity = s[lbr+1 : rbr]
+		keywordMap[identity] = true
+		identityMap[identity] = true
 	} else {
 		for _, field := range strings.FieldsFunc(s, func(r rune) bool {
 			return !utf8.ValidRune(r) || unicode.IsSpace(r) // split on invalid runes and whitespace
@@ -201,17 +222,17 @@ func keywordsFromSearch(search string) (keywords []string, emails []string) {
 		}
 		keywords = append(keywords, k)
 	}
-	for k := range emailMap {
+	for k := range identityMap {
 		if k == "" {
 			continue
 		}
-		emails = append(emails, k)
+		identities = append(identities, k)
 	}
 	return
 }
 
-func KeywordsTSVector(key *openpgp.PrimaryKey) string {
-	keywords, _, _ := keywordsFromKey(key)
+func KeywordsTSVector(key *openpgp.PrimaryKey) (string, []UserIdDoc) {
+	keywords, uiddocs := keywordsFromKey(key)
 	tsv, err := keywordsToTSVector(keywords, " ")
 	if err != nil {
 		// In this case we've found a key that generated
@@ -221,10 +242,10 @@ func KeywordsTSVector(key *openpgp.PrimaryKey) string {
 		// In the future we should catch this earlier and
 		// reject it as a bad key, but for now we just skip
 		// storing keyword information.
-		log.Warningf("keywords for rfp=%q exceeds limit, ignoring: %v", key.RFingerprint, err)
-		return ""
+		log.Warningf("ignoring keywords for fp=%q: %v", key.Fingerprint(), err)
+		return "", nil
 	}
-	return tsv
+	return tsv, uiddocs
 }
 
 func KeywordsTSQuery(query string) (string, error) {
@@ -277,21 +298,17 @@ func desanitiseFromTSVector(s string) string {
 // `sep` SHOULD be either " " or "&". If "&", the output
 // string is a tsquery rather than a tsvector.
 func keywordsToTSVector(keywords []string, sep string) (string, error) {
-	const (
-		lexemeLimit   = 2048            // 2KB for single lexeme
-		tsvectorLimit = 1 * 1024 * 1024 // 1MB for lexemes + positions
-	)
 	newKeywords := []string{}
 	for _, k := range keywords {
 		if l := len(k); l >= lexemeLimit {
-			return "", fmt.Errorf("keyword exceeds limit (%d >= %d)", l, lexemeLimit)
+			return "", fmt.Errorf("keyword exceeds lexeme limit (%d >= %d)", l, lexemeLimit)
 		}
 		newKeywords = append(newKeywords, fmt.Sprintf("'%s'", sanitiseForTSVector(k)))
 	}
 	tsv := strings.Join(newKeywords, sep)
 
 	if l := len(tsv); l >= tsvectorLimit {
-		return "", fmt.Errorf("keywords exceeds limit (%d >= %d)", l, tsvectorLimit)
+		return "", fmt.Errorf("keywords exceed TSVector limit (%d >= %d)", l, tsvectorLimit)
 	}
 	return tsv, nil
 }
@@ -299,44 +316,69 @@ func keywordsToTSVector(keywords []string, sep string) (string, error) {
 // refresh updates the keyDoc fields that cache values from the jsonb document.
 // This is called by pghkp.refreshBunch to ensure the DB columns are correctly populated,
 // for example after changes to the keyword indexing policy, or to the DB schema.
-func (kd *KeyDoc) Refresh() (changed bool, err error) {
+func (kd *KeyDoc) Refresh() (subkeyDocs []SubKeyDoc, uidDocs []UserIdDoc, changed bool, err error) {
 	// Unmarshal the doc
 	var pk jsonhkp.PrimaryKey
 	err = json.Unmarshal([]byte(kd.Doc), &pk)
 	if err != nil {
-		return false, err
+		return nil, nil, false, err
 	}
 	rfp := openpgp.Reverse(pk.Fingerprint)
 	key, err := ReadOneKey(pk.Bytes(), rfp)
 	if err != nil {
-		return false, err
+		return nil, nil, false, err
 	}
 	if key == nil {
 		// ReadOneKey could not find any keys in the JSONB doc
-		return false, openpgp.ErrKeyEvaporated
+		return nil, nil, false, openpgp.ErrKeyEvaporated
 	}
+	subkeyDocs = subkeys(key)
 
 	// Regenerate keywords
-	newKeywords, _, _ := keywordsFromKey(key)
+	newKeywords, uidDocs := keywordsFromKey(key)
 	oldKeywords := keywordsFromTSVector(kd.Keywords)
 	slices.Sort(newKeywords)
 	slices.Sort(oldKeywords)
 	if !slices.Equal(oldKeywords, newKeywords) {
 		log.Debugf("keyword mismatch on fp=%s, was %q now %q", pk.Fingerprint, oldKeywords, newKeywords)
-		kd.Keywords, err = keywordsToTSVector(newKeywords, " ")
+		tsv, err2 := keywordsToTSVector(newKeywords, " ")
+		if err2 != nil {
+			// In this case we've found a key that generated
+			// an invalid tsvector - this is pretty much guaranteed
+			// to be a bogus key, since having a valid key with
+			// user IDs that exceed limits is highly unlikely.
+			// In the future we should catch this earlier and
+			// reject it as a bad key, but when refreshing we
+			// skip, so the batch won't fail in its entirety.
+			log.Warningf("ignoring keywords on fp=%q: %v", pk.Fingerprint, err2)
+			if kd.Keywords != "" {
+				// Clear existing keywords IFF they were non-empty
+				kd.Keywords = ""
+				changed = true
+			}
+		} else {
+			kd.Keywords = tsv
+			changed = true
+		}
+	}
+
+	// Update to post-2.3 keyDoc schema
+	if kd.VFingerprint == "" {
+		kd.VFingerprint = key.VFingerprint
 		changed = true
 	}
 
 	// In future we may add further tasks here.
 	// DO NOT update the md5 field, as this is used by bulkReindex to prevent simultaneous updates.
 
-	return changed, err
+	return subkeyDocs, uidDocs, changed, nil
 }
 
-func subkeys(key *openpgp.PrimaryKey) []string {
-	var result []string
+func subkeys(key *openpgp.PrimaryKey) []SubKeyDoc {
+	var result []SubKeyDoc
 	for _, subkey := range key.SubKeys {
-		result = append(result, subkey.RFingerprint)
+		version := fmt.Sprintf("%02x%s", subkey.Version, subkey.Fingerprint())
+		result = append(result, SubKeyDoc{key.RFingerprint, subkey.RFingerprint, version})
 	}
 	return result
 }

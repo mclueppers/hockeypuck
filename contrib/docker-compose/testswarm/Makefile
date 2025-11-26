@@ -10,7 +10,7 @@ init:
 scenario%:
 	docker-compose --env-file .env.$@ up -d
 	@echo
-	@echo "WARNING: please wait five minutes for the cluster to stabilise"
+	@echo "WARNING: please wait 60 seconds for the cluster to stabilise"
 	@echo
 
 stop:
@@ -19,3 +19,4 @@ stop:
 test:
 	./tests/totals
 	./tests/pkslog
+	echo "select * from userids;" | ./tests/dbq pg0
