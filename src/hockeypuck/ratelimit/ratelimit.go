@@ -257,7 +257,7 @@ func (rl *RateLimiter) updateTorExitList() {
 	}
 
 	// Fetch the latest Tor exit list from URL
-	exits, err := fetchTorExitList(rl.config.Tor.ExitNodeListURL, rl.config.Tor.UserAgent)
+	exits, err := fetchTorExitList(rl.ctx, rl.config.Tor.ExitNodeListURL, rl.config.Tor.UserAgent)
 	if err != nil {
 		// Log error but continue with existing data
 		log.WithError(err).WithField("current_count", currentStats.Count).

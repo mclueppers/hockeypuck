@@ -50,6 +50,7 @@ func New(config *types.BackendConfig) (*Backend, error) {
 		DialTimeout:  config.Redis.DialTimeout,
 		ReadTimeout:  config.Redis.ReadTimeout,
 		WriteTimeout: config.Redis.WriteTimeout,
+		MaxRetries:   config.Redis.MaxRetries,
 	})
 
 	// Test connection
@@ -92,9 +93,16 @@ func (b *Backend) allBansKey() string {
 	return b.keyPrefix + "bans"
 }
 
-// GetMetrics retrieves metrics for an IP address
+// GetMetrics retrieves metrics for an IP address.
 func (b *Backend) GetMetrics(ctx context.Context, ip string) (*types.IPMetrics, error) {
-	pipe := b.client.Pipeline()
+	return b.getMetrics(ctx, b.client, ip)
+}
+
+// getMetrics retrieves metrics using the supplied command runner, which may be
+// the shared client or a transaction (*redis.Tx) so that UpdateMetrics can read
+// on the watched connection.
+func (b *Backend) getMetrics(ctx context.Context, c redis.Cmdable, ip string) (*types.IPMetrics, error) {
+	pipe := c.Pipeline()
 
 	// Get basic metrics
 	ipCmd := pipe.HGetAll(ctx, b.ipKey(ip))
@@ -168,10 +176,18 @@ func (b *Backend) GetMetrics(ctx context.Context, ip string) (*types.IPMetrics, 
 	return metrics, nil
 }
 
-// SetMetrics stores metrics for an IP address
+// SetMetrics stores metrics for an IP address.
 func (b *Backend) SetMetrics(ctx context.Context, ip string, metrics *types.IPMetrics) error {
 	pipe := b.client.Pipeline()
+	b.queueSetMetrics(ctx, pipe, ip, metrics)
+	_, err := pipe.Exec(ctx)
+	return err
+}
 
+// queueSetMetrics queues the commands that persist metrics onto the supplied
+// pipeline without executing it, so it can be used both for a plain pipeline
+// and inside a transaction (TxPipelined).
+func (b *Backend) queueSetMetrics(ctx context.Context, pipe redis.Pipeliner, ip string, metrics *types.IPMetrics) {
 	// Store basic metrics
 	ipData := map[string]any{
 		"conn_count":     metrics.Connections.Count,
@@ -202,28 +218,47 @@ func (b *Backend) SetMetrics(ctx context.Context, ip string, metrics *types.IPMe
 		pipe.SAdd(ctx, b.allBansKey(), ip)
 		pipe.Expire(ctx, b.allBansKey(), b.ttl)
 	}
-
-	_, err := pipe.Exec(ctx)
-	return err
 }
 
-// UpdateMetrics atomically updates metrics for an IP address
+// UpdateMetrics atomically updates metrics for an IP address using an
+// optimistic-lock transaction: the current value is read on the watched
+// connection and the write is performed via TxPipelined, so a concurrent
+// modification of the watched keys aborts and retries the update.
 func (b *Backend) UpdateMetrics(ctx context.Context, ip string, updateFn func(*types.IPMetrics) *types.IPMetrics) error {
-	// Redis transactions for atomic updates
-	err := b.client.Watch(ctx, func(tx *redis.Tx) error {
-		// Get current metrics
-		current, err := b.GetMetrics(ctx, ip)
+	keys := []string{
+		b.ipKey(ip),
+		b.banKey(ip),
+		b.connectionsKey(ip),
+		b.requestsKey(ip),
+		b.errorsKey(ip),
+	}
+
+	txFn := func(tx *redis.Tx) error {
+		// Read the current metrics on the watched connection.
+		current, err := b.getMetrics(ctx, tx, ip)
 		if err != nil {
 			return err
 		}
 
-		// Apply update function
 		updated := updateFn(current)
 
-		// Store updated metrics
-		return b.SetMetrics(ctx, ip, updated)
-	}, b.ipKey(ip), b.banKey(ip))
+		// Write atomically within the transaction.
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			b.queueSetMetrics(ctx, pipe, ip, updated)
+			return nil
+		})
+		return err
+	}
 
+	// Retry on optimistic-lock conflicts (TxFailedErr).
+	const maxAttempts = 3
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err = b.client.Watch(ctx, txFn, keys...)
+		if err != redis.TxFailedErr {
+			return err
+		}
+	}
 	return err
 }
 

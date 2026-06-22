@@ -29,9 +29,12 @@ import (
 	"time"
 )
 
-// fetchTorExitList fetches the Tor exit node list from the specified URL
-func fetchTorExitList(url, userAgent string) (map[string]bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// fetchTorExitList fetches the Tor exit node list from the specified URL. The
+// provided context bounds the request; deriving it from the rate limiter's
+// context lets Stop() cancel an in-flight fetch instead of blocking on the
+// timeout.
+func fetchTorExitList(ctx context.Context, url, userAgent string) (map[string]bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)

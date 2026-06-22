@@ -141,8 +141,11 @@ func NewServer(settings *Settings) (*Server, error) {
 	ratelimit.RegisterMemoryBackend(memory.MemoryBackendConstructor)
 	ratelimit.RegisterRedisBackend(redis.RedisBackendConstructor)
 
-	// Set proper UserAgent for Tor exit list fetching
-	settings.RateLimit.Tor.UserAgent = userAgent
+	// Default the UserAgent for Tor exit list fetching to the server's
+	// software/version, but let an explicit config value take precedence.
+	if settings.RateLimit.Tor.UserAgent == "" {
+		settings.RateLimit.Tor.UserAgent = userAgent
+	}
 
 	// Initialize rate limiter with partner provider for keyserver sync exemptions
 	s.rateLimiter, err = ratelimit.NewWithPartners(&settings.RateLimit, s.sksPeer)

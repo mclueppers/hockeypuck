@@ -68,7 +68,15 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Check rate limits
+			// Check rate limits, then track the request below. These are
+			// deliberately two separate steps rather than one atomic
+			// check-and-increment: limits are enforced on a best-effort basis.
+			// Under a burst of concurrent requests from the same IP, several
+			// can pass this check before any is tracked, briefly overshooting
+			// the configured thresholds. That is acceptable for abuse
+			// mitigation (the sliding-window counters and bans still converge),
+			// and avoids the cost/complexity of a fully atomic check-and-track
+			// across the pluggable backends.
 			violated, reason := rl.checkRateLimits(clientIP, r)
 			if violated {
 				// Record the violation with detailed reason for logging

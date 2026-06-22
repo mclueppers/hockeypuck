@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -103,7 +104,7 @@ func TestTorFetchUserAgent(t *testing.T) {
 	defer srv.Close()
 
 	const userAgent = "Hockeypuck/2.1.8 (Test UserAgent)"
-	exits, err := fetchTorExitList(srv.URL, userAgent)
+	exits, err := fetchTorExitList(context.Background(), srv.URL, userAgent)
 	if err != nil {
 		t.Fatalf("fetchTorExitList failed: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestTorFetchEmptyResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exits, err := fetchTorExitList(srv.URL, "")
+	exits, err := fetchTorExitList(context.Background(), srv.URL, "")
 	if err != nil {
 		t.Fatalf("fetchTorExitList failed: %v", err)
 	}

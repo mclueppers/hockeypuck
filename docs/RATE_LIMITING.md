@@ -134,7 +134,7 @@ banHeader = "X-RateLimit-Ban"
 - `tor.exitNodeListURL`: URL for Tor exit node list (default: dan.me.uk)
 - `tor.updateInterval`: How often to update Tor exit list (default: 1h)
 - `tor.cacheFilePath`: Local cache file for Tor exit nodes (default: tor_exit_nodes.cache)
-- `tor.userAgent`: User-Agent header for Tor exit list fetching (set programmatically by server)
+- `tor.userAgent`: User-Agent header for Tor exit list fetching (defaults to the server's software/version if left empty)
 
 ##### Global Tor Rate Limiting (Anti-Vandalism Protection)
 These settings apply to ALL Tor exits combined, providing protection against coordinated attacks:
