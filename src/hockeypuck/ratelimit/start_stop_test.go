@@ -42,7 +42,9 @@ func TestRateLimiterTorBackgroundTask(t *testing.T) {
 	config.Tor.Enabled = true
 	config.Tor.CacheFilePath = "" // Don't write a cache file into the package dir
 	config.Tor.UpdateInterval = 100 * time.Millisecond
-	config.Tor.ExitNodeListURL = "https://httpbin.org/status/404" // This will fail and log warnings
+	// Fail fast with a local connection-refused address rather than depending
+	// on an external endpoint, while still exercising the fetch error path.
+	config.Tor.ExitNodeListURL = "http://127.0.0.1:1/torlist"
 
 	rl, err := New(&config)
 	if err != nil {

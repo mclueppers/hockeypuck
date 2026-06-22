@@ -2,7 +2,7 @@ package ratelimit
 
 import (
 	"context"
-	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -13,10 +13,7 @@ func TestTorStatsReporting(t *testing.T) {
 	// Test: Both memory and redis backends should work the same way
 	config1 := DefaultConfig()
 	config1.Tor.Enabled = true
-	config1.Tor.CacheFilePath = "/tmp/test_tor_cache.json"
-
-	// Clean up any existing cache file
-	os.Remove(config1.Tor.CacheFilePath)
+	config1.Tor.CacheFilePath = filepath.Join(t.TempDir(), "test_tor_cache.json")
 
 	rl1, err := New(&config1)
 	if err != nil {
@@ -58,7 +55,4 @@ func TestTorStatsReporting(t *testing.T) {
 	} else if isTor {
 		t.Error("Expected 192.168.1.1 to NOT be detected as Tor exit")
 	}
-
-	// Cleanup
-	os.Remove(config1.Tor.CacheFilePath)
 }

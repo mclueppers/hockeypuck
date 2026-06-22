@@ -193,66 +193,73 @@ func testConnectivity(client *http.Client, config *Config) error {
 	}
 
 	for _, endpoint := range endpoints {
-		testURL := baseURL + endpoint.path
-		if config.Verbose {
-			fmt.Printf("Testing %s (%s)...\n", endpoint.description, testURL)
-		}
-
-		req, err := http.NewRequest("GET", testURL, nil)
-		if err != nil {
-			if endpoint.required {
-				return fmt.Errorf("failed to create request for %s: %w", endpoint.path, err)
-			}
-			continue
-		}
-
-		req.Header.Set("User-Agent", config.UserAgent)
-
-		resp, err := client.Do(req)
-		if err != nil {
-			if endpoint.required {
-				return fmt.Errorf("failed to connect to %s: %w", endpoint.path, err)
-			}
+		// Wrapped in a function literal so the response body is closed at the
+		// end of each iteration rather than only when testConnectivity returns.
+		if err := func() error {
+			testURL := baseURL + endpoint.path
 			if config.Verbose {
-				fmt.Printf("  Failed: %v\n", err)
+				fmt.Printf("Testing %s (%s)...\n", endpoint.description, testURL)
 			}
-			continue
-		}
-		defer resp.Body.Close()
 
-		if config.Verbose {
-			fmt.Printf("  Status: %s\n", resp.Status)
-
-			// Print interesting headers
-			for header, values := range resp.Header {
-				headerLower := strings.ToLower(header)
-				if strings.Contains(headerLower, "rate") ||
-					strings.Contains(headerLower, "limit") ||
-					strings.Contains(headerLower, "ban") ||
-					strings.Contains(headerLower, "tor") ||
-					strings.HasPrefix(headerLower, "x-") ||
-					header == "Server" {
-					fmt.Printf("  %s: %s\n", header, strings.Join(values, ", "))
+			req, err := http.NewRequest("GET", testURL, nil)
+			if err != nil {
+				if endpoint.required {
+					return fmt.Errorf("failed to create request for %s: %w", endpoint.path, err)
 				}
+				return nil
 			}
 
-			// For stats endpoints, show some response body
-			if strings.Contains(endpoint.path, "stats") && resp.StatusCode == 200 {
-				body, err := io.ReadAll(resp.Body)
-				if err == nil && len(body) > 0 {
-					// Show first 200 characters of response
-					preview := string(body)
-					if len(preview) > 200 {
-						preview = preview[:200] + "..."
+			req.Header.Set("User-Agent", config.UserAgent)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				if endpoint.required {
+					return fmt.Errorf("failed to connect to %s: %w", endpoint.path, err)
+				}
+				if config.Verbose {
+					fmt.Printf("  Failed: %v\n", err)
+				}
+				return nil
+			}
+			defer resp.Body.Close()
+
+			if config.Verbose {
+				fmt.Printf("  Status: %s\n", resp.Status)
+
+				// Print interesting headers
+				for header, values := range resp.Header {
+					headerLower := strings.ToLower(header)
+					if strings.Contains(headerLower, "rate") ||
+						strings.Contains(headerLower, "limit") ||
+						strings.Contains(headerLower, "ban") ||
+						strings.Contains(headerLower, "tor") ||
+						strings.HasPrefix(headerLower, "x-") ||
+						header == "Server" {
+						fmt.Printf("  %s: %s\n", header, strings.Join(values, ", "))
 					}
-					fmt.Printf("  Response preview: %s\n", preview)
+				}
+
+				// For stats endpoints, show some response body
+				if strings.Contains(endpoint.path, "stats") && resp.StatusCode == 200 {
+					body, err := io.ReadAll(resp.Body)
+					if err == nil && len(body) > 0 {
+						// Show first 200 characters of response
+						preview := string(body)
+						if len(preview) > 200 {
+							preview = preview[:200] + "..."
+						}
+						fmt.Printf("  Response preview: %s\n", preview)
+					}
 				}
 			}
-		}
 
-		if resp.StatusCode >= 400 && endpoint.required {
-			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("server returned error %d for %s: %s", resp.StatusCode, endpoint.path, string(body))
+			if resp.StatusCode >= 400 && endpoint.required {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("server returned error %d for %s: %s", resp.StatusCode, endpoint.path, string(body))
+			}
+			return nil
+		}(); err != nil {
+			return err
 		}
 	}
 

@@ -1,6 +1,9 @@
 package ratelimit
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,27 +20,27 @@ func TestTorFetchRobustness(t *testing.T) {
 	// Test cases for different HTTP error codes
 	testCases := []struct {
 		name        string
-		url         string
+		statusCode  int
 		description string
 	}{
 		{
 			name:        "HTTP 429 (Rate Limited)",
-			url:         "https://httpbin.org/status/429",
+			statusCode:  http.StatusTooManyRequests,
 			description: "rate limited by server",
 		},
 		{
 			name:        "HTTP 403 (Forbidden)",
-			url:         "https://httpbin.org/status/403",
+			statusCode:  http.StatusForbidden,
 			description: "access forbidden (possibly rate limited or blocked)",
 		},
 		{
 			name:        "HTTP 500 (Internal Server Error)",
-			url:         "https://httpbin.org/status/500",
+			statusCode:  http.StatusInternalServerError,
 			description: "internal server error",
 		},
 		{
 			name:        "HTTP 503 (Service Unavailable)",
-			url:         "https://httpbin.org/status/503",
+			statusCode:  http.StatusServiceUnavailable,
 			description: "service unavailable (server may be overloaded)",
 		},
 	}
@@ -46,10 +49,17 @@ func TestTorFetchRobustness(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Logf("Testing %s: %s", tc.name, tc.description)
 
+			// Serve the desired status code from a local test server so the
+			// suite stays hermetic (no external network dependency).
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+			}))
+			defer srv.Close()
+
 			// Create a rate limiter with the problematic URL
 			config := types.DefaultConfig()
 			config.Tor.UpdateInterval = 100 * time.Millisecond // Very short for testing
-			config.Tor.ExitNodeListURL = tc.url
+			config.Tor.ExitNodeListURL = srv.URL
 			// Use a unique cache file under a temp dir to avoid interference
 			// and to keep test artifacts out of the package directory.
 			config.Tor.CacheFilePath = filepath.Join(t.TempDir(), "test_cache.json")
@@ -83,55 +93,48 @@ func TestTorFetchRobustness(t *testing.T) {
 func TestTorFetchUserAgent(t *testing.T) {
 	t.Log("Testing Tor exit list fetching with custom UserAgent...")
 
-	// Create a rate limiter with custom UserAgent
-	config := types.DefaultConfig()
-	config.Tor.UpdateInterval = 100 * time.Millisecond
-	config.Tor.UserAgent = "Hockeypuck/2.1.8 (Test UserAgent)"
-	config.Tor.CacheFilePath = "" // Disable caching for this test
-	// Use httpbin.org/user-agent which echoes back the User-Agent header
-	config.Tor.ExitNodeListURL = "https://httpbin.org/user-agent"
+	// A local server that records the User-Agent header it receives and
+	// returns a valid exit list.
+	var gotUserAgent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.UserAgent()
+		fmt.Fprintln(w, "1.2.3.4")
+	}))
+	defer srv.Close()
 
-	rl, err := New(&config)
+	const userAgent = "Hockeypuck/2.1.8 (Test UserAgent)"
+	exits, err := fetchTorExitList(srv.URL, userAgent)
 	if err != nil {
-		t.Fatalf("Failed to create rate limiter: %v", err)
-	}
-	defer rl.Stop()
-
-	// Verify that the UserAgent is stored correctly
-	if rl.config.Tor.UserAgent != "Hockeypuck/2.1.8 (Test UserAgent)" {
-		t.Errorf("Expected UserAgent to be set correctly, got: %s", rl.config.Tor.UserAgent)
+		t.Fatalf("fetchTorExitList failed: %v", err)
 	}
 
-	t.Log("UserAgent configuration test completed")
+	if gotUserAgent != userAgent {
+		t.Errorf("Expected User-Agent %q to be sent, got %q", userAgent, gotUserAgent)
+	}
+
+	if !exits["1.2.3.4"] {
+		t.Errorf("Expected exit list to contain 1.2.3.4, got %v", exits)
+	}
 }
 
 func TestTorFetchEmptyResponse(t *testing.T) {
-	t.Log("Testing Tor exit list fetching with empty response...")
+	t.Log("Testing Tor exit list fetching with non-IP (HTML) response...")
 
-	// Create a rate limiter that gets an empty response
-	config := types.DefaultConfig()
-	config.Tor.UpdateInterval = 100 * time.Millisecond
-	config.Tor.CacheFilePath = "" // Disable caching for this test
-	// httpbin.org/html returns HTML content, not a list of IPs - should be treated as empty
-	config.Tor.ExitNodeListURL = "https://httpbin.org/html"
+	// A 200 response carrying HTML rather than a list of IPs must be treated
+	// as empty: no line parses as an IP address.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "<html><body>Service temporarily unavailable</body></html>")
+	}))
+	defer srv.Close()
 
-	rl, err := New(&config)
+	exits, err := fetchTorExitList(srv.URL, "")
 	if err != nil {
-		t.Fatalf("Failed to create rate limiter: %v", err)
+		t.Fatalf("fetchTorExitList failed: %v", err)
 	}
-	defer rl.Stop()
 
-	t.Log("Rate limiter created, waiting for update attempts...")
-	time.Sleep(200 * time.Millisecond)
-
-	// Check stats - should handle empty/invalid response gracefully
-	stats := rl.GetRateLimitStats()
-	t.Logf("Stats after invalid content: %+v", stats)
-
-	// The system should handle invalid content gracefully
-	// (HTML content will be filtered out since it doesn't look like IP addresses)
-
-	t.Log("Invalid content handling test completed")
+	if len(exits) != 0 {
+		t.Errorf("Expected no exits from HTML content, got %d: %v", len(exits), exits)
+	}
 }
 
 func TestTorFetchNetworkError(t *testing.T) {

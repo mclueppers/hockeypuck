@@ -36,6 +36,16 @@ func TestReasonSanitization(t *testing.T) {
 			expectedClient: "Access temporarily restricted",
 		},
 		{
+			name:           "Active global Tor ban",
+			detailedReason: "All Tor exits banned until 2025-07-01T15:14:53Z: Global Tor rate limit exceeded (2 >= 1 per 10s)",
+			expectedClient: "Service temporarily unavailable for Tor users",
+		},
+		{
+			name:           "Already banned Tor exit",
+			detailedReason: "IP banned until 2025-07-01T15:14:53Z: Tor exit: too many concurrent connections (1 >= 1)",
+			expectedClient: "Request temporarily blocked",
+		},
+		{
 			name:           "Connection rate",
 			detailedReason: "Too many concurrent connections (5 >= 2)",
 			expectedClient: "Too many connections",

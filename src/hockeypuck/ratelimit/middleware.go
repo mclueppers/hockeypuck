@@ -18,6 +18,7 @@
 package ratelimit
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -114,14 +115,13 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				}
 			}
 
-			// Decrement connection count on completion
-			ctx := r.Context()
-			go func() {
-				<-ctx.Done()
-				if err := rl.backend.DecrementConnections(ctx, clientIP); err != nil {
-					log.WithError(err).WithField("ip", clientIP).Error("Failed to decrement connections")
-				}
-			}()
+			// Decrement the connection count now that the request has completed.
+			// Use a background context rather than the request context, which is
+			// already cancelled at this point and would cause backends such as
+			// Redis to fail with "context canceled", leaking the connection count.
+			if err := rl.backend.DecrementConnections(context.Background(), clientIP); err != nil {
+				log.WithError(err).WithField("ip", clientIP).Error("Failed to decrement connections")
+			}
 		})
 	}
 }
@@ -153,9 +153,20 @@ func formatDuration(d time.Duration) string {
 func sanitizeReasonForClient(reason string) string {
 	reasonLower := strings.ToLower(reason)
 
-	// Global Tor bans
-	if strings.Contains(reasonLower, "global tor") {
-		return "Service temporarily unavailable for Tor users"
+	// Tor-related messages must be matched before the generic "banned until"
+	// case below, since an active Tor ban reads "All Tor exits banned until …"
+	// and a per-IP Tor ban reads "IP banned until …: Tor exit: …".
+	if strings.Contains(reasonLower, "tor") {
+		// Global Tor bans (all exits)
+		if strings.Contains(reasonLower, "global") || strings.Contains(reasonLower, "all tor exits") {
+			return "Service temporarily unavailable for Tor users"
+		}
+		// Rapid fire / abuse patterns
+		if strings.Contains(reasonLower, "rapid") || strings.Contains(reasonLower, "abuse") {
+			return "Request pattern detected"
+		}
+		// Other Tor-specific bans
+		return "Request temporarily blocked"
 	}
 
 	// Already banned (check this before other patterns)
@@ -163,14 +174,9 @@ func sanitizeReasonForClient(reason string) string {
 		return "Access temporarily restricted"
 	}
 
-	// Rapid fire / abuse patterns (check before general Tor patterns)
+	// Rapid fire / abuse patterns
 	if strings.Contains(reasonLower, "rapid") || strings.Contains(reasonLower, "abuse") {
 		return "Request pattern detected"
-	}
-
-	// Tor-specific bans
-	if strings.Contains(reasonLower, "tor exit") {
-		return "Request temporarily blocked"
 	}
 
 	// Connection-related

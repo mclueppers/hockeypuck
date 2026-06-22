@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -70,9 +71,16 @@ func fetchTorExitList(url, userAgent string) (map[string]bool, error) {
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line != "" && !strings.HasPrefix(line, "#") {
-			exits[line] = true
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
+		// Only accept lines that parse as valid IP addresses. This guards
+		// against an upstream endpoint returning an HTML/error page with
+		// HTTP 200, which would otherwise pollute the exit list with garbage.
+		if net.ParseIP(line) == nil {
+			continue
+		}
+		exits[line] = true
 	}
 
 	return exits, scanner.Err()
