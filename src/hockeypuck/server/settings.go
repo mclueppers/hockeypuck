@@ -20,6 +20,7 @@ package server
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -31,6 +32,7 @@ import (
 	"hockeypuck/hkp/pks"
 	"hockeypuck/hkp/storage"
 	"hockeypuck/metrics"
+	"hockeypuck/ratelimit"
 )
 
 type confluxConfig struct {
@@ -185,10 +187,13 @@ type Settings struct {
 
 	OpenPGP OpenPGPConfig `toml:"openpgp"`
 
+	RateLimit ratelimit.Config `toml:"rateLimit"`
+
 	LogFile  string `toml:"logfile"`
 	LogLevel string `toml:"loglevel"`
 
 	Webroot string `toml:"webroot"`
+	DataDir string `toml:"dataDir"`
 
 	Contact      string `toml:"contact"`
 	Hostname     string `toml:"hostname"`
@@ -217,6 +222,7 @@ const (
 	DefaultLogLevel          = "INFO"
 	DefaultReconStaleSecs    = 86400
 	DefaultMaxResponseLen    = 268435456
+	DefaultDataDir           = "/var/lib/hockeypuck"
 )
 
 var (
@@ -245,7 +251,9 @@ func DefaultSettings() Settings {
 		},
 		Metrics:        metricsSettings,
 		OpenPGP:        DefaultOpenPGP(),
+		RateLimit:      ratelimit.DefaultConfig(),
 		LogLevel:       DefaultLogLevel,
+		DataDir:        DefaultDataDir,
 		Software:       Software,
 		Version:        Version,
 		BuiltAt:        BuiltAt,
@@ -256,36 +264,51 @@ func DefaultSettings() Settings {
 }
 
 func ParseSettings(data string) (*Settings, error) {
-	// Parse the configuration file as a template first
-	tmpl, err := template.New("config").Funcs(sprig.TxtFuncMap()).Funcs(envFuncMap()).Parse(data)
+	// Check if data contains template syntax - if so, process as template first
+	if strings.Contains(data, "{{") && strings.Contains(data, "}}") {
+		// Parse the configuration file as a template first
+		tmpl, err := template.New("config").Funcs(sprig.TxtFuncMap()).Funcs(envFuncMap()).Parse(data)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		// Initialize a writer to render the template
+		w := &bytes.Buffer{}
+
+		// Render the template
+		err = tmpl.Execute(w, readEnv())
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		data = w.String()
+	}
+
+	// Try parsing directly without wrapper first
+	settings := DefaultSettings()
+	_, err := toml.Decode(data, &settings)
+	if err != nil {
+		// Try parsing with [hockeypuck] wrapper
+		var docWithWrapper struct {
+			Hockeypuck Settings `toml:"hockeypuck"`
+		}
+		docWithWrapper.Hockeypuck = DefaultSettings()
+		_, err = toml.Decode(data, &docWithWrapper)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		settings = docWithWrapper.Hockeypuck
+	}
+
+	err = settings.Conflux.Recon.Settings.Resolve()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	// Initialize a writer to render the template
-	w := &bytes.Buffer{}
+	// Configure data directory-based paths if not explicitly set
+	settings.configureDataDirPaths()
 
-	// Render the template
-	err = tmpl.Execute(w, readEnv())
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	var doc struct {
-		Hockeypuck Settings `toml:"hockeypuck"`
-	}
-	doc.Hockeypuck = DefaultSettings()
-	_, err = toml.Decode(w.String(), &doc)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	err = doc.Hockeypuck.Conflux.Recon.Settings.Resolve()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return &doc.Hockeypuck, nil
+	return &settings, nil
 }
 
 // EnvFuncMap returns a map of functions that can be used in a template
@@ -315,4 +338,12 @@ func readEnv() map[string]string {
 		env[pair[0]] = pair[1]
 	}
 	return env
+}
+
+// configureDataDirPaths sets up data directory-based paths for various components
+func (s *Settings) configureDataDirPaths() {
+	// If Tor cache file path is relative, make it absolute under DataDir
+	if s.RateLimit.Tor.CacheFilePath != "" && s.DataDir != "" && !filepath.IsAbs(s.RateLimit.Tor.CacheFilePath) {
+		s.RateLimit.Tor.CacheFilePath = filepath.Join(s.DataDir, s.RateLimit.Tor.CacheFilePath)
+	}
 }
