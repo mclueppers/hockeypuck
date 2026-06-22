@@ -1,9 +1,6 @@
 # Hockeypuck Configuration with Rate Limiting
 # This example shows how to configure the rate limiting system
 
-# Service data directory (for cache files, etc.)
-dataDir = "/hockeypuck/data"
-
 [hkp]
 bind = ":11371"
 logRequestDetails = true
@@ -61,7 +58,7 @@ banDuration = "24h"                      # Initial ban duration for Tor violatio
 repeatOffenderBanDuration = "576h"       # 24 days for repeat offenders
 exitNodeListURL = "https://www.dan.me.uk/torlist/?exit"
 updateInterval = "1h"                    # Update interval (1h is appropriate for production)
-# cacheFilePath = "tor_exit_nodes.cache" # Cache file path (relative paths use dataDir, absolute paths used as-is)
+# cacheFilePath = "tor_exit_nodes.cache" # Cache file path (relative to the working directory, like the recon ptree path; absolute paths used as-is)
 
 # Global Tor Rate Limiting (Anti-Vandalism Protection)
 # These settings apply to ALL Tor exits combined, not per-exit

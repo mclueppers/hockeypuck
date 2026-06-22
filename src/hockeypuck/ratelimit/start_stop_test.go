@@ -9,6 +9,7 @@ func TestRateLimiterStartStop(t *testing.T) {
 	config := DefaultConfig()
 	config.Backend.Type = "memory"
 	config.Enabled = true
+	config.Tor.CacheFilePath = "" // Don't write a cache file into the package dir
 
 	rl, err := New(&config)
 	if err != nil {
@@ -39,6 +40,7 @@ func TestRateLimiterTorBackgroundTask(t *testing.T) {
 	config.Backend.Type = "memory"
 	config.Enabled = true
 	config.Tor.Enabled = true
+	config.Tor.CacheFilePath = "" // Don't write a cache file into the package dir
 	config.Tor.UpdateInterval = 100 * time.Millisecond
 	config.Tor.ExitNodeListURL = "https://httpbin.org/status/404" // This will fail and log warnings
 

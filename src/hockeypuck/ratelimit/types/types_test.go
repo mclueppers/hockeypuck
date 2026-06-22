@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -228,7 +228,7 @@ func TestBackendStats(t *testing.T) {
 		BannedIPs:    5,
 		TorBannedIPs: 2,
 		BackendType:  "memory",
-		BackendInfo:  map[string]interface{}{"test": "value"},
+		BackendInfo:  map[string]any{"test": "value"},
 	}
 
 	if stats.TrackedIPs != 100 {

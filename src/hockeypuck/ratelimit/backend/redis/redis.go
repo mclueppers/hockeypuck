@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -173,7 +173,7 @@ func (b *Backend) SetMetrics(ctx context.Context, ip string, metrics *types.IPMe
 	pipe := b.client.Pipeline()
 
 	// Store basic metrics
-	ipData := map[string]interface{}{
+	ipData := map[string]any{
 		"conn_count":     metrics.Connections.Count,
 		"conn_last_seen": metrics.Connections.LastSeen.Format(time.RFC3339),
 		"req_last_seen":  metrics.Requests.LastSeen.Format(time.RFC3339),
@@ -189,7 +189,7 @@ func (b *Backend) SetMetrics(ctx context.Context, ip string, metrics *types.IPMe
 
 	// Store ban if exists
 	if metrics.Ban != nil {
-		banData := map[string]interface{}{
+		banData := map[string]any{
 			"banned_at":     metrics.Ban.BannedAt.Format(time.RFC3339),
 			"expires_at":    metrics.Ban.ExpiresAt.Format(time.RFC3339),
 			"reason":        metrics.Ban.Reason,
@@ -293,7 +293,7 @@ func (b *Backend) AddError(ctx context.Context, ip string, timestamp time.Time) 
 func (b *Backend) SetBan(ctx context.Context, ip string, ban *types.BanRecord) error {
 	pipe := b.client.Pipeline()
 
-	banData := map[string]interface{}{
+	banData := map[string]any{
 		"banned_at":     ban.BannedAt.Format(time.RFC3339),
 		"expires_at":    ban.ExpiresAt.Format(time.RFC3339),
 		"reason":        ban.Reason,
@@ -421,7 +421,7 @@ func (b *Backend) GetStats(ctx context.Context) (types.BackendStats, error) {
 		}
 	}
 
-	backendInfo := map[string]interface{}{
+	backendInfo := map[string]any{
 		"redis_db_size": dbSizeCmd.Val(),
 		"redis_info":    b.parseRedisInfo(infoCmd.Val()),
 	}
@@ -501,7 +501,7 @@ func (b *Backend) StoreTorExits(ctx context.Context, exits map[string]bool) erro
 	// Add all Tor exit IPs to set (only those marked as true)
 	trueExitCount := 0
 	if len(exits) > 0 {
-		ips := make([]interface{}, 0, len(exits))
+		ips := make([]any, 0, len(exits))
 		for ip, isTorExit := range exits {
 			if isTorExit {
 				ips = append(ips, ip)
@@ -517,7 +517,7 @@ func (b *Backend) StoreTorExits(ctx context.Context, exits map[string]bool) erro
 	pipe.Expire(ctx, b.torExitKey(), b.ttl)
 
 	// Store update timestamp and count
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"count":        trueExitCount,
 		"last_updated": time.Now().Format(time.RFC3339),
 	}
@@ -622,7 +622,7 @@ func (b *Backend) SetGlobalTorBan(ctx context.Context, ban *types.BanRecord) err
 		return b.client.Del(ctx, key).Err()
 	}
 
-	banData := map[string]interface{}{
+	banData := map[string]any{
 		"banned_at":     ban.BannedAt.Format(time.RFC3339),
 		"expires_at":    ban.ExpiresAt.Format(time.RFC3339),
 		"reason":        ban.Reason,
@@ -703,7 +703,7 @@ func (b *Backend) storeTimeList(ctx context.Context, pipe redis.Pipeliner, key s
 
 	// Clear existing list and add new times
 	pipe.Del(ctx, key)
-	timeStrings := make([]interface{}, len(times))
+	timeStrings := make([]any, len(times))
 	for i, t := range times {
 		timeStrings[i] = t.Format(time.RFC3339)
 	}

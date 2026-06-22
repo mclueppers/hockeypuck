@@ -139,6 +139,18 @@ func recordHTTPRequestDuration(method string, statusCode int, duration time.Dura
 	serverMetrics.httpRequestDuration.WithLabelValues(method, strconv.Itoa(statusCode)).Observe(duration.Seconds())
 }
 
+// rateLimitMetricsObserver adapts the rate limiter's metrics events onto the
+// server's Prometheus metrics. It implements ratelimit.MetricsObserver.
+type rateLimitMetricsObserver struct{}
+
+func (rateLimitMetricsObserver) RecordViolation(reason string, isTor bool) {
+	recordRateLimitViolation(reason, isTor)
+}
+
+func (rateLimitMetricsObserver) UpdateStats(trackedIPs, bannedRegular, bannedTor int) {
+	updateRateLimitStats(trackedIPs, bannedRegular, bannedTor)
+}
+
 // recordRateLimitViolation records a rate limiting violation in Prometheus metrics
 func recordRateLimitViolation(reason string, isTor bool) {
 	torLabel := "false"

@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -50,12 +50,24 @@ func RegisterRedisBackend(constructor func(*BackendConfig) (Backend, error)) {
 	types.RegisterRedisBackend(constructor)
 }
 
+// MetricsObserver receives rate-limit events so that external packages (such
+// as the server's Prometheus integration) can record metrics without the
+// ratelimit package having to depend on them.
+type MetricsObserver interface {
+	// RecordViolation is called for every rate-limit violation.
+	RecordViolation(reason string, isTor bool)
+	// UpdateStats is called after bans and cleanup with the current counts of
+	// tracked IPs and banned IPs (split into regular and Tor exits).
+	UpdateStats(trackedIPs, bannedRegular, bannedTor int)
+}
+
 // RateLimiter implements the core rate limiting engine
 type RateLimiter struct {
 	config          *Config
 	backend         Backend
 	partnerProvider PartnerProvider // For accessing recon peers
 	whitelists      []*net.IPNet
+	metricsObserver MetricsObserver
 
 	// Background task management
 	t             tomb.Tomb
@@ -202,6 +214,7 @@ func (rl *RateLimiter) cleanupRoutine() error {
 			if err := rl.backend.Cleanup(rl.ctx, staleThreshold); err != nil {
 				log.WithError(err).Error("Failed to cleanup stale metrics")
 			}
+			rl.reportStats()
 		}
 	}
 }
@@ -596,6 +609,30 @@ func (rl *RateLimiter) trackError(ip string, r *http.Request) error {
 	return nil
 }
 
+// SetMetricsObserver registers an observer that receives rate-limit metrics
+// events. Passing nil disables metrics reporting.
+func (rl *RateLimiter) SetMetricsObserver(observer MetricsObserver) {
+	rl.metricsObserver = observer
+}
+
+// reportStats pushes current backend statistics to the metrics observer, if
+// one is registered.
+func (rl *RateLimiter) reportStats() {
+	if rl.metricsObserver == nil {
+		return
+	}
+	stats, err := rl.backend.GetStats(rl.ctx)
+	if err != nil {
+		log.WithError(err).Debug("Failed to get backend stats for metrics")
+		return
+	}
+	bannedRegular := stats.BannedIPs - stats.TorBannedIPs
+	if bannedRegular < 0 {
+		bannedRegular = 0
+	}
+	rl.metricsObserver.UpdateStats(stats.TrackedIPs, bannedRegular, stats.TorBannedIPs)
+}
+
 // recordViolation logs a rate limit violation and potentially bans the IP
 func (rl *RateLimiter) recordViolation(ip string, r *http.Request, reason string) {
 	log.WithFields(log.Fields{
@@ -612,12 +649,19 @@ func (rl *RateLimiter) recordViolation(ip string, r *http.Request, reason string
 		isTorExit = false // Default to false on error
 	}
 
+	if rl.metricsObserver != nil {
+		rl.metricsObserver.RecordViolation(reason, isTorExit)
+	}
+
 	// Apply bans for certain violations
 	if strings.Contains(reason, "rate exceeded") || strings.Contains(reason, "too many") {
 		if err := rl.banIP(ip, reason, isTorExit); err != nil {
 			log.WithError(err).WithField("ip", ip).Error("Failed to ban IP")
 		}
 	}
+
+	// Refresh exported gauges after a potential ban/state change.
+	rl.reportStats()
 }
 
 // banIP bans an IP address
@@ -714,20 +758,20 @@ func (rl *RateLimiter) determineBanType(ip string, isTorExit bool, reason string
 }
 
 // GetRateLimitStats returns current rate limiting statistics
-func (rl *RateLimiter) GetRateLimitStats() map[string]interface{} {
+func (rl *RateLimiter) GetRateLimitStats() map[string]any {
 	ctx := context.Background()
 
 	stats, err := rl.backend.GetStats(ctx)
 	if err != nil {
 		log.WithError(err).Debug("Failed to get backend stats")
-		return map[string]interface{}{
+		return map[string]any{
 			"enabled":      rl.config.Enabled,
 			"backend_type": "unknown",
 			"error":        err.Error(),
 		}
 	}
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"enabled":      rl.config.Enabled,
 		"tracked_ips":  stats.TrackedIPs,
 		"banned_ips":   stats.BannedIPs,

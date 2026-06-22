@@ -150,6 +150,9 @@ func NewServer(settings *Settings) (*Server, error) {
 		return nil, errors.WithStack(err)
 	}
 
+	// Report rate-limit violations and ban/tracking counts to Prometheus.
+	s.rateLimiter.SetMetricsObserver(rateLimitMetricsObserver{})
+
 	// Add rate limiting middleware first (before logging)
 	s.middle.Use(s.rateLimiter.Middleware())
 

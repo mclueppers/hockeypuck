@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -212,7 +212,7 @@ func (mb *Backend) GetStats(ctx context.Context) (types.BackendStats, error) {
 		BannedIPs:    bannedCount,
 		TorBannedIPs: torBannedCount,
 		BackendType:  "memory",
-		BackendInfo: map[string]interface{}{
+		BackendInfo: map[string]any{
 			"memory_usage": len(mb.metrics),
 		},
 	}, nil

@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -27,12 +27,12 @@ type mockBackend struct {
 	name string
 }
 
-func mockConstructor(config interface{}) (interface{}, error) {
+func mockConstructor(config any) (any, error) {
 	if config == nil {
 		return nil, errors.New("config is required")
 	}
 
-	if configMap, ok := config.(map[string]interface{}); ok {
+	if configMap, ok := config.(map[string]any); ok {
 		if name, exists := configMap["name"]; exists {
 			return &mockBackend{name: name.(string)}, nil
 		}
@@ -41,7 +41,7 @@ func mockConstructor(config interface{}) (interface{}, error) {
 	return &mockBackend{name: "default"}, nil
 }
 
-func failingConstructor(config interface{}) (interface{}, error) {
+func failingConstructor(config any) (any, error) {
 	return nil, errors.New("construction failed")
 }
 
@@ -89,7 +89,7 @@ func TestNewSuccess(t *testing.T) {
 	Register("mock", mockConstructor)
 
 	// Test successful creation
-	config := map[string]interface{}{
+	config := map[string]any{
 		"name": "test-backend",
 	}
 
@@ -170,7 +170,7 @@ func TestNewWithDefaultConfig(t *testing.T) {
 	Register("mock", mockConstructor)
 
 	// Test with empty config (should use default)
-	config := map[string]interface{}{}
+	config := map[string]any{}
 
 	backend, err := New("mock", config)
 	if err != nil {
@@ -223,7 +223,7 @@ func TestRegisterOverwrite(t *testing.T) {
 	}
 
 	// Test that the second constructor is used
-	_, err := New("test", map[string]interface{}{})
+	_, err := New("test", map[string]any{})
 	if err == nil {
 		t.Error("Expected error from overwritten constructor")
 	}

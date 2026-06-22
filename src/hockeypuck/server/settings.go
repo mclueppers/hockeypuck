@@ -20,7 +20,6 @@ package server
 import (
 	"bytes"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -193,7 +192,6 @@ type Settings struct {
 	LogLevel string `toml:"loglevel"`
 
 	Webroot string `toml:"webroot"`
-	DataDir string `toml:"dataDir"`
 
 	Contact      string `toml:"contact"`
 	Hostname     string `toml:"hostname"`
@@ -222,7 +220,6 @@ const (
 	DefaultLogLevel          = "INFO"
 	DefaultReconStaleSecs    = 86400
 	DefaultMaxResponseLen    = 268435456
-	DefaultDataDir           = "/var/lib/hockeypuck"
 )
 
 var (
@@ -253,7 +250,6 @@ func DefaultSettings() Settings {
 		OpenPGP:        DefaultOpenPGP(),
 		RateLimit:      ratelimit.DefaultConfig(),
 		LogLevel:       DefaultLogLevel,
-		DataDir:        DefaultDataDir,
 		Software:       Software,
 		Version:        Version,
 		BuiltAt:        BuiltAt,
@@ -264,49 +260,45 @@ func DefaultSettings() Settings {
 }
 
 func ParseSettings(data string) (*Settings, error) {
-	// Check if data contains template syntax - if so, process as template first
-	if strings.Contains(data, "{{") && strings.Contains(data, "}}") {
-		// Parse the configuration file as a template first
-		tmpl, err := template.New("config").Funcs(sprig.TxtFuncMap()).Funcs(envFuncMap()).Parse(data)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		// Initialize a writer to render the template
-		w := &bytes.Buffer{}
-
-		// Render the template
-		err = tmpl.Execute(w, readEnv())
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		data = w.String()
-	}
-
-	// Try parsing directly without wrapper first
-	settings := DefaultSettings()
-	_, err := toml.Decode(data, &settings)
-	if err != nil {
-		// Try parsing with [hockeypuck] wrapper
-		var docWithWrapper struct {
-			Hockeypuck Settings `toml:"hockeypuck"`
-		}
-		docWithWrapper.Hockeypuck = DefaultSettings()
-		_, err = toml.Decode(data, &docWithWrapper)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		settings = docWithWrapper.Hockeypuck
-	}
-
-	err = settings.Conflux.Recon.Settings.Resolve()
+	// Always parse the configuration file as a template first; the cost is
+	// negligible and it keeps behaviour consistent whether or not the file
+	// happens to contain template syntax.
+	tmpl, err := template.New("config").Funcs(sprig.TxtFuncMap()).Funcs(envFuncMap()).Parse(data)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	// Configure data directory-based paths if not explicitly set
-	settings.configureDataDirPaths()
+	w := &bytes.Buffer{}
+	if err = tmpl.Execute(w, readEnv()); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	rendered := w.String()
+
+	// Hockeypuck configuration files use a top-level [hockeypuck] table.
+	// Decode into the wrapper and detect its presence via the TOML metadata
+	// rather than relying on a decode error: TOML silently ignores unknown
+	// top-level keys, so a wrapped document would otherwise be accepted as an
+	// empty (default) Settings without ever populating it.
+	wrapper := struct {
+		Hockeypuck Settings `toml:"hockeypuck"`
+	}{Hockeypuck: DefaultSettings()}
+	meta, err := toml.Decode(rendered, &wrapper)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	settings := wrapper.Hockeypuck
+	if !meta.IsDefined("hockeypuck") {
+		// Fall back to an unwrapped document.
+		settings = DefaultSettings()
+		if _, err = toml.Decode(rendered, &settings); err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
+
+	if err = settings.Conflux.Recon.Settings.Resolve(); err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	return &settings, nil
 }
@@ -338,12 +330,4 @@ func readEnv() map[string]string {
 		env[pair[0]] = pair[1]
 	}
 	return env
-}
-
-// configureDataDirPaths sets up data directory-based paths for various components
-func (s *Settings) configureDataDirPaths() {
-	// If Tor cache file path is relative, make it absolute under DataDir
-	if s.RateLimit.Tor.CacheFilePath != "" && s.DataDir != "" && !filepath.IsAbs(s.RateLimit.Tor.CacheFilePath) {
-		s.RateLimit.Tor.CacheFilePath = filepath.Join(s.DataDir, s.RateLimit.Tor.CacheFilePath)
-	}
 }

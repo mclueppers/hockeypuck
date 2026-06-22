@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -22,7 +22,7 @@ import (
 )
 
 // Constructor function signature for backend implementations
-type Constructor func(interface{}) (interface{}, error)
+type Constructor func(any) (any, error)
 
 var constructors = make(map[string]Constructor)
 
@@ -32,7 +32,7 @@ func Register(name string, constructor Constructor) {
 }
 
 // New creates a new backend instance based on configuration
-func New(backendType string, config interface{}) (interface{}, error) {
+func New(backendType string, config any) (any, error) {
 	constructor, exists := constructors[backendType]
 	if !exists {
 		return nil, fmt.Errorf("unknown backend type: %s", backendType)

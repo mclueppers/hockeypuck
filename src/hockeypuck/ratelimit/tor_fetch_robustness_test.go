@@ -1,7 +1,7 @@
 package ratelimit
 
 import (
-	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -42,7 +42,7 @@ func TestTorFetchRobustness(t *testing.T) {
 		},
 	}
 
-	for i, tc := range testCases {
+	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Logf("Testing %s: %s", tc.name, tc.description)
 
@@ -50,8 +50,9 @@ func TestTorFetchRobustness(t *testing.T) {
 			config := types.DefaultConfig()
 			config.Tor.UpdateInterval = 100 * time.Millisecond // Very short for testing
 			config.Tor.ExitNodeListURL = tc.url
-			// Use unique cache file for each test to avoid interference
-			config.Tor.CacheFilePath = fmt.Sprintf("test_cache_%d.json", i)
+			// Use a unique cache file under a temp dir to avoid interference
+			// and to keep test artifacts out of the package directory.
+			config.Tor.CacheFilePath = filepath.Join(t.TempDir(), "test_cache.json")
 
 			rl, err := New(&config)
 			if err != nil {

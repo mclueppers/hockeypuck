@@ -162,10 +162,6 @@ Global rate limiting provides an additional layer of protection beyond per-IP li
 
 When enabled, IPs of configured recon partners are automatically exempted from rate limiting to ensure keyserver synchronization is not interrupted. This feature works with the HKP recon protocol configuration to identify legitimate keyserver peers.
 
-#### Keyserver Synchronization
-
-- `keyserverSync.enabled`: Enable automatic exemptions for configured recon peers (default: true)
-
 #### Backend Configuration
 
 - `backend.type`: Backend type for rate limiting storage (default: memory)
@@ -180,23 +176,21 @@ When enabled, IPs of configured recon partners are automatically exempted from r
 - `backend.redis.ttl`: Time-to-live for Redis keys (default: 24h)
 - `backend.redis.maxRetries`: Max number of retries for Redis commands (default: 3)
 
-## Service Data Directory
+## Tor Exit Node Cache File
 
-Hockeypuck supports a global `dataDir` configuration option that specifies where service data files (like cache files) are stored:
+The Tor exit node list is cached to a local file so the list survives restarts.
+The cache path follows the same convention as the recon ptree (`leveldb.path`):
 
 ```toml
-# Service data directory configuration
-dataDir = "/var/lib/hockeypuck"
-
 [rateLimit.tor]
-cacheFilePath = "tor_exit_nodes.cache"  # Relative to dataDir
+cacheFilePath = "tor_exit_nodes.cache"  # Relative to the working directory
 # OR
 cacheFilePath = "/absolute/path/tor.cache"  # Absolute path
 ```
 
-- **Relative paths**: Cache files specified with relative paths are placed under `dataDir`
-- **Absolute paths**: Cache files specified with absolute paths are used as-is
-- **Default**: If `dataDir` is not specified, defaults to `/var/lib/hockeypuck`
+- **Relative paths**: resolved relative to Hockeypuck's working directory
+- **Absolute paths**: used as-is
+- **Empty**: disables the on-disk cache
 
 ## Global Tor Rate Limiting
 
@@ -348,7 +342,7 @@ The Tor exit node list is fetched from the configured URL and stored both in the
 ```toml
 [rateLimit.tor]
 enabled = true
-cacheFilePath = "tor_exit_nodes.cache"  # Relative to dataDir
+cacheFilePath = "tor_exit_nodes.cache"  # Relative to the working directory
 updateInterval = "1h"
 ```
 

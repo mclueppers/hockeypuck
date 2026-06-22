@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -142,11 +142,11 @@ type IPMetrics struct {
 
 // BackendStats holds statistics about the backend
 type BackendStats struct {
-	TrackedIPs   int                    `json:"tracked_ips"`
-	BannedIPs    int                    `json:"banned_ips"`
-	TorBannedIPs int                    `json:"tor_banned_ips"`
-	BackendType  string                 `json:"backend_type"`
-	BackendInfo  map[string]interface{} `json:"backend_info,omitempty"`
+	TrackedIPs   int            `json:"tracked_ips"`
+	BannedIPs    int            `json:"banned_ips"`
+	TorBannedIPs int            `json:"tor_banned_ips"`
+	BackendType  string         `json:"backend_type"`
+	BackendInfo  map[string]any `json:"backend_info,omitempty"`
 }
 
 // TorStats holds Tor exit node statistics

@@ -1,6 +1,6 @@
 /*
    Hockeypuck - OpenPGP key server
-   Copyright (C) 2012-2025 Hockeypuck Contributors
+   Copyright (C) 2012-2025 Casey Marshall and the Hockeypuck Contributors
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published by
@@ -237,6 +237,44 @@ contact = "admin@{{ env "TEST_HOSTNAME" }}"
 	}
 }
 
+// TestParseSettingsWithHockeypuckWrapper guards against a regression where a
+// config wrapped in the canonical top-level [hockeypuck] table was silently
+// dropped (TOML ignores unknown top-level keys), leaving an empty Settings.
+func TestParseSettingsWithHockeypuckWrapper(t *testing.T) {
+	tomlData := `
+[hockeypuck]
+loglevel = "DEBUG"
+
+[hockeypuck.hkp]
+bind = ":11371"
+
+[hockeypuck.openpgp.db]
+driver = "postgres-jsonb"
+dsn = "database=hkp host=/var/run/postgresql sslmode=disable"
+`
+
+	settings, err := ParseSettings(tomlData)
+	if err != nil {
+		t.Fatalf("ParseSettings failed: %v", err)
+	}
+
+	if settings.LogLevel != "DEBUG" {
+		t.Errorf("Expected loglevel DEBUG, got %q", settings.LogLevel)
+	}
+
+	if settings.HKP.Bind != ":11371" {
+		t.Errorf("Expected HKP bind :11371, got %q", settings.HKP.Bind)
+	}
+
+	if settings.OpenPGP.DB.Driver != "postgres-jsonb" {
+		t.Errorf("Expected DB driver postgres-jsonb, got %q", settings.OpenPGP.DB.Driver)
+	}
+
+	if !strings.Contains(settings.OpenPGP.DB.DSN, "database=hkp") {
+		t.Errorf("Expected DB DSN to be populated, got %q", settings.OpenPGP.DB.DSN)
+	}
+}
+
 func TestParseSettingsInvalidTOML(t *testing.T) {
 	invalidData := `
 [hkp
@@ -434,8 +472,12 @@ func TestParseSettingsWithPKS(t *testing.T) {
 [hkp]
 bind = ":11371"
 
-# PKS configuration would go here if it were used
-# This test verifies that other configs don't interfere
+[pks]
+from = "hockeypuck@example.com"
+to = ["pks@keyserver.example.com"]
+
+[pks.smtp]
+host = "smtp.example.com:587"
 `
 
 	settings, err := ParseSettings(tomlData)
@@ -446,102 +488,21 @@ bind = ":11371"
 	if settings.HKP.Bind != ":11371" {
 		t.Errorf("Expected HKP bind :11371, got %s", settings.HKP.Bind)
 	}
-}
 
-func TestDataDirConfiguration(t *testing.T) {
-	// Test default behavior
-	config1 := `
-loglevel="DEBUG"
-`
-	settings1, err := ParseSettings(config1)
-	if err != nil {
-		t.Fatalf("Failed to parse config: %v", err)
+	if settings.PKS == nil {
+		t.Fatal("PKS config should not be nil")
 	}
 
-	// Should use default DataDir and update Tor cache path
-	if settings1.DataDir != DefaultDataDir {
-		t.Errorf("Expected DataDir %q, got %q", DefaultDataDir, settings1.DataDir)
-	}
-	expectedPath1 := "/var/lib/hockeypuck/tor_exit_nodes.cache"
-	if settings1.RateLimit.Tor.CacheFilePath != expectedPath1 {
-		t.Errorf("Expected Tor cache path %q, got %q", expectedPath1, settings1.RateLimit.Tor.CacheFilePath)
+	if settings.PKS.From != "hockeypuck@example.com" {
+		t.Errorf("Expected PKS from hockeypuck@example.com, got %s", settings.PKS.From)
 	}
 
-	// Test custom DataDir
-	config2 := `
-loglevel="DEBUG"
-dataDir="/custom/data"
-`
-	settings2, err := ParseSettings(config2)
-	if err != nil {
-		t.Fatalf("Failed to parse config: %v", err)
+	if len(settings.PKS.To) != 1 || settings.PKS.To[0] != "pks@keyserver.example.com" {
+		t.Errorf("Expected PKS to [pks@keyserver.example.com], got %v", settings.PKS.To)
 	}
 
-	if settings2.DataDir != "/custom/data" {
-		t.Errorf("Expected DataDir %q, got %q", "/custom/data", settings2.DataDir)
-	}
-	expectedPath2 := "/custom/data/tor_exit_nodes.cache"
-	if settings2.RateLimit.Tor.CacheFilePath != expectedPath2 {
-		t.Errorf("Expected Tor cache path %q, got %q", expectedPath2, settings2.RateLimit.Tor.CacheFilePath)
-	}
-
-	// Test explicit cache path (should not be overridden by DataDir)
-	config3 := `
-loglevel="DEBUG"
-dataDir="/custom/data"
-
-[rateLimit.tor]
-cacheFilePath="/explicit/path/tor_cache.json"
-`
-	settings3, err := ParseSettings(config3)
-	if err != nil {
-		t.Fatalf("Failed to parse config: %v", err)
-	}
-
-	if settings3.DataDir != "/custom/data" {
-		t.Errorf("Expected DataDir %q, got %q", "/custom/data", settings3.DataDir)
-	}
-	expectedPath3 := "/explicit/path/tor_cache.json"
-	if settings3.RateLimit.Tor.CacheFilePath != expectedPath3 {
-		t.Errorf("Expected Tor cache path %q, got %q", expectedPath3, settings3.RateLimit.Tor.CacheFilePath)
-	}
-
-	// Test custom relative cache file name with DataDir
-	config4 := `
-loglevel="DEBUG"
-dataDir="/opt/hockeypuck"
-
-[rateLimit.tor]
-cacheFilePath="custom_tor_exits.json"
-`
-	settings4, err := ParseSettings(config4)
-	if err != nil {
-		t.Fatalf("Failed to parse config: %v", err)
-	}
-
-	if settings4.DataDir != "/opt/hockeypuck" {
-		t.Errorf("Expected DataDir %q, got %q", "/opt/hockeypuck", settings4.DataDir)
-	}
-	expectedPath4 := "/opt/hockeypuck/custom_tor_exits.json"
-	if settings4.RateLimit.Tor.CacheFilePath != expectedPath4 {
-		t.Errorf("Expected Tor cache path %q, got %q", expectedPath4, settings4.RateLimit.Tor.CacheFilePath)
-	}
-
-	// Test subdirectory in relative path
-	config5 := `
-dataDir="/var/lib/hockeypuck"
-
-[rateLimit.tor]
-cacheFilePath="cache/tor/exits.cache"
-`
-	settings5, err := ParseSettings(config5)
-	if err != nil {
-		t.Fatalf("Failed to parse config: %v", err)
-	}
-
-	expectedPath5 := "/var/lib/hockeypuck/cache/tor/exits.cache"
-	if settings5.RateLimit.Tor.CacheFilePath != expectedPath5 {
-		t.Errorf("Expected Tor cache path %q, got %q", expectedPath5, settings5.RateLimit.Tor.CacheFilePath)
+	if settings.PKS.SMTP.Host != "smtp.example.com:587" {
+		t.Errorf("Expected PKS SMTP host smtp.example.com:587, got %s", settings.PKS.SMTP.Host)
 	}
 }
 
