@@ -345,9 +345,10 @@ func (st *storage) Update(key *openpgp.PrimaryKey, lastID string, lastMD5 string
 		return errors.WithStack(err)
 	}
 	for _, uid := range uiddocs {
-		// NOTE that the ON CONFLICT clause below should never be triggered (because of the DELETE FROM above),
-		// but primary key conflicts have been seen in production if ON CONFLICT is not present.
-		// TODO: WTF https://github.com/hockeypuck/hockeypuck/issues/453
+		// The root cause of the historic primary-key conflicts (https://github.com/hockeypuck/hockeypuck/issues/453)
+		// was duplicate uidstrings in uiddocs, now deduplicated in types.keywordsFromKey. The DELETE FROM above
+		// clears any pre-existing rows, so neither clause below should ever fire; ON CONFLICT is retained purely
+		// as defense-in-depth against a regression reintroducing duplicate uidstrings.
 		_, err := tx.Exec("INSERT INTO userids (rfingerprint, uidstring, identity, confidence) "+
 			"VALUES ( $1::TEXT, $2::TEXT, $3::TEXT, $4::INTEGER ) "+
 			"ON CONFLICT (rfingerprint, uidstring) DO UPDATE SET identity = $3::TEXT, confidence = $4::INTEGER", // gracefully update existing records

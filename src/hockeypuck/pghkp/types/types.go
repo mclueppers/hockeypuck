@@ -144,6 +144,18 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 	uids := append([]*openpgp.UserID{}, key.UserIDs...)
 	uids = append(uids, key.RedactedUserIDs...)
 	keywordMap := make(map[string]bool)
+	// The (rfingerprint, uidstring) pair is the primary key of the userids table, but the
+	// uidstring is openpgp.CleanUtf8(packet.Id) - which strips C0 controls and DEL and maps
+	// every invalid rune to '?' - while in-memory dedup (openpgp.dedup) keys UserID packets
+	// on a digest of their raw bytes. Two UserID packets that differ only in characters
+	// CleanUtf8 normalizes away (e.g. an embedded 0x01) therefore get distinct digests,
+	// survive dedup as separate UserIDs, and then collapse to the same uidstring here.
+	// Emitting both as uiddocs causes a duplicate-key violation on insert, so deduplicate
+	// by uidstring, keeping the first occurrence. (RedactedUserIDs are appended above for
+	// completeness; in practice they never collide with a live UserID, since redaction only
+	// happens on a hard revocation, which drops the live UserIDs.)
+	// See https://github.com/hockeypuck/hockeypuck/issues/453
+	seenUids := make(map[string]bool, len(uids))
 	uiddocs = make([]UserIdDoc, 0, len(uids))
 	for _, uid := range uids {
 		if l := len(uid.Keywords); l >= lexemeLimit {
@@ -151,6 +163,11 @@ func keywordsFromKey(key *openpgp.PrimaryKey) (keywords []string, uiddocs []User
 			log.Warningf("userid packet on fp=%q exceeds limit (%d >= %d), ignoring: %v...", key.Fingerprint, l, lexemeLimit, uid.Keywords[:32])
 			continue
 		}
+		if seenUids[uid.Keywords] {
+			log.Debugf("skipping duplicate uidstring %q on fp=%q", uid.Keywords, key.Fingerprint)
+			continue
+		}
+		seenUids[uid.Keywords] = true
 		identity, _, _, _ := uid.IdentityInfo(keywordMap)
 		uiddoc := UserIdDoc{
 			Fingerprint: key.Fingerprint,

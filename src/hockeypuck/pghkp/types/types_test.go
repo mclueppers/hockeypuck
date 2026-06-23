@@ -72,3 +72,37 @@ func (s *S) TestKeywordsFromKey(c *gc.C) {
 	c.Assert(keydocs[1].UidString, gc.Equals, "Casey Marshall <cmars@cmarstech.com>")
 	c.Assert(keydocs[1].Identity, gc.Equals, "cmars@cmarstech.com")
 }
+
+// TestKeywordsFromKeyDedupesUids is a regression test for
+// https://github.com/hockeypuck/hockeypuck/issues/453: keywordsFromKey must not
+// emit two uiddocs with the same uidstring, otherwise inserting them violates the
+// (rfingerprint, uidstring) primary key. This happens because the uidstring is the
+// CleanUtf8'd packet text while openpgp.dedup keys UserID packets on their raw bytes,
+// so two packets that differ only in characters CleanUtf8 normalizes away survive
+// dedup as distinct UserIDs yet collapse to the same uidstring here.
+func (s *S) TestKeywordsFromKeyDedupesUids(c *gc.C) {
+	key := &openpgp.PrimaryKey{
+		PublicKey: openpgp.PublicKey{
+			Packet: openpgp.Packet{UUID: "deadbeef"},
+		},
+		UserIDs: []*openpgp.UserID{
+			{Keywords: "Alice <alice@example.com>"},
+			// identical uidstring; on the wire this was a distinct packet (e.g. it
+			// carried a stripped control char) that survived dedup as a separate UserID
+			{Keywords: "Alice <alice@example.com>"},
+			{Keywords: "Bob <bob@example.com>"},
+		},
+	}
+
+	_, keydocs := keywordsFromKey(key)
+	c.Assert(keydocs, gc.HasLen, 2)
+
+	seen := make(map[string]bool)
+	for _, doc := range keydocs {
+		c.Assert(seen[doc.UidString], gc.Equals, false,
+			gc.Commentf("duplicate uidstring emitted: %q", doc.UidString))
+		seen[doc.UidString] = true
+	}
+	c.Assert(seen["Alice <alice@example.com>"], gc.Equals, true)
+	c.Assert(seen["Bob <bob@example.com>"], gc.Equals, true)
+}
