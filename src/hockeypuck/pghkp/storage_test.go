@@ -264,23 +264,16 @@ func (s *S) TestUpdateDeduplicatesUserIds(c *gc.C) {
 	log.Infof("starting TestUpdateDeduplicatesUserIds")
 	// e68e311d.asc has two distinct user IDs.
 	s.addKey(c, "e68e311d.asc")
-	keyDocs := s.queryAllKeys(c)
-	c.Assert(keyDocs, gc.HasLen, 1)
-	md5 := keyDocs[0].MD5
-
-	keytext, err := io.ReadAll(testing.MustInput("e68e311d.asc"))
-	c.Assert(err, gc.IsNil)
-	keys := openpgp.MustReadArmorKeys(bytes.NewBuffer(keytext))
-	c.Assert(keys, gc.HasLen, 1)
-	key := keys[0]
+	records, err := s.storage.FetchRecordsByFp([]string{"8d7c6b1a49166a46ff293af2d4236eabe68e311d"})
+	c.Assert(records, gc.HasLen, 1)
+	md5 := records[0].MD5
+	key := records[0].PrimaryKey
 	c.Assert(len(key.UserIDs) >= 1, gc.Equals, true)
 
 	// Inject a second UserID with the same Keywords text, emulating a packet that
 	// survives byte-based dedup and yields a duplicate uidstring downstream.
 	dup := *key.UserIDs[0]
 	key.UserIDs = append(key.UserIDs, &dup)
-	// Keep the existing md5 so Update's "WHERE md5 = lastMD5" matches the stored row.
-	key.MD5 = md5
 
 	err = s.storage.Update(key, key.KeyID, md5)
 	c.Assert(err, gc.IsNil, gc.Commentf("Update with a duplicate uidstring must not violate userids_pkey"))
