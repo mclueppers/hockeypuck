@@ -149,16 +149,26 @@ func (policy *Policy) ValidSelfSigned(key *PrimaryKey, selfSignedOnly bool) erro
 	for _, trust := range tt.Errors {
 		log.Debugf("Dropped trust packet because %s", trust.Error)
 	}
+	// A redacted UID is minted and appended to key.Trusts above whenever a hard revocation
+	// drops a persistable UserID. Merge dedups its inputs *before* calling ValidSelfSigned,
+	// so this freshly minted packet is never run through dedup. On a merge of an on-disk
+	// copy that is already revoked and redacted with an incoming copy that still carries the
+	// live UserID packet, that yields two redacted-UID trust packets for the same uidstring.
+	// Deduplicate by uidstring here so a redacted identity is emitted at most once; otherwise
+	// it reaches storage twice and violates the userids (rfingerprint, uidstring) primary key.
+	// See https://github.com/hockeypuck/hockeypuck/issues/453
+	seenRedacted := make(map[string]bool)
 	for _, trust := range tt.RedactedUserIDs {
-		if trust.Error == nil {
-			if policy.IsPersistable(trust.UserID) {
-				redactedUIDs = append(redactedUIDs, trust.UserID)
-				trusts = append(trusts, trust.Trust)
-			} else {
-				log.Debugf("Dropped non-persistable RedactedUserID trust packet")
-			}
-		} else {
+		if trust.Error != nil {
 			log.Debugf("Dropped trust packet because %s", trust.Error.Error())
+		} else if !policy.IsPersistable(trust.UserID) {
+			log.Debugf("Dropped non-persistable RedactedUserID trust packet")
+		} else if seenRedacted[trust.UserID.Keywords] {
+			log.Debugf("Dropped duplicate RedactedUserID trust packet for %q on fp=%s", trust.UserID.Keywords, key.Fingerprint)
+		} else {
+			seenRedacted[trust.UserID.Keywords] = true
+			redactedUIDs = append(redactedUIDs, trust.UserID)
+			trusts = append(trusts, trust.Trust)
 		}
 	}
 	key.Trusts = trusts

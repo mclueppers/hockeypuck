@@ -400,3 +400,36 @@ func (s *ResolveSuite) TestGenerateRedactedUID(c *gc.C) {
 	c.Assert(key2.RedactedUserIDs, gc.HasLen, 1)
 	c.Assert(key2.RedactedUserIDs[0].Keywords, gc.Equals, "test@example.org")
 }
+
+// TestMergeDeduplicatesRedactedUserIDs is a regression test for
+// https://github.com/hockeypuck/hockeypuck/issues/453. Merge dedups its inputs before
+// calling ValidSelfSigned, but ValidSelfSigned mints a redacted-UID trust packet for
+// each persistable UserID dropped by a hard revocation, and that minted packet is never
+// run through dedup. Merging an on-disk copy that is already revoked and redacted with an
+// incoming copy that still carries the live UserID packet therefore used to leave two
+// redacted UIDs sharing one uidstring, which violates the userids primary key on insert.
+// ValidSelfSigned must collapse them to a single redacted UID.
+func (s *ResolveSuite) TestMergeDeduplicatesRedactedUserIDs(c *gc.C) {
+	policy, err := NewPolicy(EnumerableDomains([]string{"example.org"}))
+	c.Assert(err, gc.IsNil)
+
+	// on-disk copy: hard-revoked, so its UID is already redacted to a trust packet.
+	onDisk := MustInputAscKey("test-key-revoked.asc")
+	c.Assert(policy.ValidSelfSigned(onDisk, false), gc.IsNil)
+	c.Assert(onDisk.UserIDs, gc.HasLen, 0)
+	c.Assert(onDisk.RedactedUserIDs, gc.HasLen, 1)
+	c.Assert(onDisk.Trusts, gc.HasLen, 1)
+
+	// incoming copy: still carries the live UserID packet for the same identity.
+	incoming := MustInputAscKey("test-key.asc")
+	c.Assert(incoming.UserIDs, gc.HasLen, 1)
+
+	// The merge re-redacts the incoming live UserID; it must not duplicate the redacted
+	// UID already present on the on-disk copy.
+	c.Assert(policy.Merge(onDisk, incoming), gc.IsNil)
+	c.Assert(onDisk.UserIDs, gc.HasLen, 0)
+	c.Assert(onDisk.RedactedUserIDs, gc.HasLen, 1,
+		gc.Commentf("redacted UID must not be duplicated across the merge"))
+	c.Assert(onDisk.RedactedUserIDs[0].Keywords, gc.Equals, "test@example.org")
+	c.Assert(onDisk.Trusts, gc.HasLen, 1)
+}

@@ -252,6 +252,44 @@ func (s *S) TestAddDuplicates(c *gc.C) {
 	c.Assert(keyDocs[0].MD5, gc.Equals, "da84f40d830a7be2a3c0b7f2e146bfaa")
 }
 
+// TestUpdateDeduplicatesUserIds is a DB-backed regression test for
+// https://github.com/hockeypuck/hockeypuck/issues/453. storage.Update deletes the
+// existing userids rows and re-inserts one per uiddoc. If the uiddocs slice carries
+// the same uidstring twice (which can happen because in-memory dedup keys UserID
+// packets on their raw bytes, not their parsed Keywords text, and because an
+// identity can appear in both UserIDs and RedactedUserIDs), the second insert used
+// to collide with the (rfingerprint, uidstring) primary key and return HTTP 500.
+// Update must now complete cleanly and store exactly one row per uidstring.
+func (s *S) TestUpdateDeduplicatesUserIds(c *gc.C) {
+	log.Infof("starting TestUpdateDeduplicatesUserIds")
+	// e68e311d.asc has two distinct user IDs.
+	s.addKey(c, "e68e311d.asc")
+	records, err := s.storage.FetchRecordsByFp([]string{"8d7c6b1a49166a46ff293af2d4236eabe68e311d"})
+	c.Assert(records, gc.HasLen, 1)
+	md5 := records[0].MD5
+	key := records[0].PrimaryKey
+	c.Assert(len(key.UserIDs) >= 1, gc.Equals, true)
+
+	// Inject a second UserID with the same Keywords text, emulating a packet that
+	// survives byte-based dedup and yields a duplicate uidstring downstream.
+	dup := *key.UserIDs[0]
+	key.UserIDs = append(key.UserIDs, &dup)
+
+	err = s.storage.Update(key, key.KeyID, md5)
+	c.Assert(err, gc.IsNil, gc.Commentf("Update with a duplicate uidstring must not violate userids_pkey"))
+
+	uiddocs, err := s.storage.fetchUserIdDocsByRfp([]string{types.Reverse(key.Fingerprint)})
+	c.Assert(err, gc.IsNil)
+	// The duplicate must collapse: still exactly two distinct uidstrings, no third row.
+	c.Assert(uiddocs, gc.HasLen, 2)
+	seen := make(map[string]bool)
+	for _, doc := range uiddocs {
+		c.Assert(seen[doc.UidString], gc.Equals, false,
+			gc.Commentf("duplicate uidstring row persisted: %q", doc.UidString))
+		seen[doc.UidString] = true
+	}
+}
+
 func (s *S) TestResolve(c *gc.C) {
 	log.Infof("starting TestResolve")
 	res, err := http.Get(s.srv.URL + "/pks/lookup?op=get&search=0xf79362da44a2d1db")
