@@ -453,7 +453,7 @@ func (h *Handler) HashQuery(w http.ResponseWriter, r *http.Request, _ httprouter
 			err = h.policy.ValidSelfSigned(key, false)
 			if err == openpgp.ErrKeyEvaporated {
 				// This is most likely caused by our storage containing invalid cruft. Delete it.
-				_, err := storage.DeleteKey(h.storage, key.Fingerprint)
+				_, err := h.storage.Delete(key.Fingerprint)
 				if err != nil {
 					log.Warnf("could not delete evaporated key %s: %s", key.Fingerprint, err.Error())
 					break
@@ -465,7 +465,7 @@ func (h *Handler) HashQuery(w http.ResponseWriter, r *http.Request, _ httprouter
 				// Stop processing after the first good key; don't hog the cpu.
 				break
 			}
-			storage.UpsertKey(h.storage, key, h.policy)
+			h.storage.Upsert(key)
 		}
 	}
 
@@ -911,7 +911,7 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 			continue
 		}
 
-		change, err := storage.UpsertKey(h.storage, key, h.policy)
+		change, err := h.storage.Upsert(key)
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, errors.WithStack(err))
 			return
@@ -985,7 +985,7 @@ func (h *Handler) Replace(w http.ResponseWriter, r *http.Request, _ httprouter.P
 			return
 		}
 
-		change, err := storage.ReplaceKey(h.storage, key)
+		change, err := h.storage.Replace(key)
 		if err != nil {
 			if errors.Is(err, storage.ErrKeyNotFound) {
 				httpError(w, http.StatusNotFound, errors.WithStack(err))
@@ -1056,7 +1056,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request, _ httprouter.Pa
 		return
 	}
 	for _, key := range keys {
-		change, err := storage.DeleteKey(h.storage, key.Fingerprint)
+		change, err := h.storage.Delete(key.Fingerprint)
 		if err != nil {
 			if errors.Is(err, storage.ErrKeyNotFound) {
 				httpError(w, http.StatusNotFound, errors.WithStack(err))
@@ -1067,7 +1067,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request, _ httprouter.Pa
 		}
 
 		switch change.(type) {
-		case storage.KeyAdded:
+		case storage.KeyRemoved:
 			result.Deleted = append(result.Deleted, summary(key, ""))
 		case storage.KeyNotChanged:
 			result.Ignored = append(result.Ignored, summary(key, ""))
