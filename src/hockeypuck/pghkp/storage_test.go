@@ -764,64 +764,62 @@ func (s *S) TestType31v6(c *gc.C) {
 	s.assertIdentityReturnsKeyv2(c, "06/0d7a8be1410cd68eed4845ab487b4b4cfaecd8ebad1a1166a84230499200ee20", "pqc-test-key@example.com", true)
 }
 
-// SLH-DSA-SHAKE algos are not yet implemented in pm/gc
-//
-// func (s *S) TestType32v6(c *gc.C) {
-// 	log.Infof("starting TestType32v6")
-// 	// This is a v6 type 32 PQC primary key with a type 35 PQC encryption subkey  (draft-pqc appendix A.5)
-// 	doc := s.addKey(c, "pqc-test-key-v6type32+35.asc")
-// 	var addRes hkp.SubmissionResponse
-// 	err := json.Unmarshal(doc, &addRes)
-// 	c.Assert(err, gc.IsNil)
-// 	c.Assert(addRes.Inserted, gc.HasLen, 1)
+func (s *S) TestType32v6(c *gc.C) {
+	log.Infof("starting TestType32v6")
+	// This is a v6 type 32 PQC primary key with a type 35 PQC encryption subkey  (draft-pqc appendix A.5)
+	doc := s.addKey(c, "pqc-test-key-v6type32+35.asc")
+	var addRes hkp.SubmissionResponse
+	err := json.Unmarshal(doc, &addRes)
+	c.Assert(err, gc.IsNil)
+	c.Assert(addRes.Inserted, gc.HasLen, 1)
 
-// 	records, err := s.storage.FetchRecordsByVfp([]string{"06eed4d13fc36c78e48276a93233339c4dd230fd5f6f5c5b82c63d5c0b5e361d92"})
-// 	c.Assert(len(records), gc.Equals, 1)
-// 	c.Assert(len(records[0].SubKeys), gc.Equals, 1)
-// 	c.Assert(records[0].SubKeys[0].Algorithm, gc.Equals, 35)
+	records, err := s.storage.FetchRecordsByVfp([]string{"06eed4d13fc36c78e48276a93233339c4dd230fd5f6f5c5b82c63d5c0b5e361d92"})
+	c.Assert(len(records), gc.Equals, 1)
+	c.Assert(len(records[0].SubKeys), gc.Equals, 1)
+	c.Assert(records[0].SubKeys[0].Algorithm, gc.Equals, 35)
 
-// 	s.assertKeyFPHasUIDv2(c, "06/eed4d13fc36c78e48276a93233339c4dd230fd5f6f5c5b82c63d5c0b5e361d92", "PQC user (Test Key) <pqc-test-key@example.com>", true)
-//	// v6 keys are not searchable by keyid (draft-hkp section 5.1.3)
-// 	s.assertIdentityReturnsKeyv2(c, "06/eed4d13fc36c78e48276a93233339c4dd230fd5f6f5c5b82c63d5c0b5e361d92", "pqc-test-key@example.com", true)
-// }
+	s.assertKeyFPHasUIDv2(c, "06/eed4d13fc36c78e48276a93233339c4dd230fd5f6f5c5b82c63d5c0b5e361d92", "PQC user (Test Key) <pqc-test-key@example.com>", true)
+	// v6 keys are not searchable by keyid (draft-hkp section 5.1.3)
+	s.assertIdentityReturnsKeyv2(c, "06/eed4d13fc36c78e48276a93233339c4dd230fd5f6f5c5b82c63d5c0b5e361d92", "pqc-test-key@example.com", true)
+}
 
-// func (s *S) TestType33v6(c *gc.C) {
-// 	log.Infof("starting TestType33v6")
-// 	// This is a v6 type 33 PQC primary key with a type 35 PQC encryption subkey  (draft-pqc appendix A.6)
-// 	doc := s.addKey(c, "pqc-test-key-v6type33+35.asc")
-// 	var addRes hkp.SubmissionResponse
-// 	err := json.Unmarshal(doc, &addRes)
-// 	c.Assert(err, gc.IsNil)
-// 	c.Assert(addRes.Inserted, gc.HasLen, 1)
+func (s *S) TestType33v6(c *gc.C) {
+	log.Infof("starting TestType33v6")
+	// This is a v6 type 33 PQC primary key with a type 35 PQC encryption subkey  (draft-pqc appendix A.6)
+	doc := s.addKey(c, "pqc-test-key-v6type33+35.asc")
+	var addRes hkp.SubmissionResponse
+	err := json.Unmarshal(doc, &addRes)
+	c.Assert(err, gc.IsNil)
+	c.Assert(addRes.Inserted, gc.HasLen, 1)
 
-// 	records, err := s.storage.FetchRecordsByVfp([]string{"06d54e0307021169f7b88beb2b76e3aad0e114be1a8f982d74dba9ca51d03537f4"})
-// 	c.Assert(len(records), gc.Equals, 1)
-// 	c.Assert(len(records[0].SubKeys), gc.Equals, 1)
-// 	c.Assert(records[0].SubKeys[0].Algorithm, gc.Equals, 35)
+	records, err := s.storage.FetchRecordsByVfp([]string{"06d54e0307021169f7b88beb2b76e3aad0e114be1a8f982d74dba9ca51d03537f4"})
+	c.Assert(len(records), gc.Equals, 1)
+	c.Assert(len(records[0].SubKeys), gc.Equals, 1)
+	c.Assert(records[0].SubKeys[0].Algorithm, gc.Equals, 35)
 
-// 	s.assertKeyFPHasUIDv2(c, "06/d54e0307021169f7b88beb2b76e3aad0e114be1a8f982d74dba9ca51d03537f4", "PQC user (Test Key) <pqc-test-key@example.com>", true)
-//	// v6 keys are not searchable by keyid (draft-hkp section 5.1.3)
-// 	s.assertIdentityReturnsKeyv2(c, "06/d54e0307021169f7b88beb2b76e3aad0e114be1a8f982d74dba9ca51d03537f4", "pqc-test-key@example.com", true)
-// }
+	s.assertKeyFPHasUIDv2(c, "06/d54e0307021169f7b88beb2b76e3aad0e114be1a8f982d74dba9ca51d03537f4", "PQC user (Test Key) <pqc-test-key@example.com>", true)
+	// v6 keys are not searchable by keyid (draft-hkp section 5.1.3)
+	s.assertIdentityReturnsKeyv2(c, "06/d54e0307021169f7b88beb2b76e3aad0e114be1a8f982d74dba9ca51d03537f4", "pqc-test-key@example.com", true)
+}
 
-// func (s *S) TestType34v6(c *gc.C) {
-// 	log.Infof("starting TestType34v6")
-// 	// This is a v6 type 34 PQC primary key with a type 36 PQC encryption subkey  (draft-pqc appendix A.7)
-// 	doc := s.addKey(c, "pqc-test-key-v6type34+36.asc")
-// 	var addRes hkp.SubmissionResponse
-// 	err := json.Unmarshal(doc, &addRes)
-// 	c.Assert(err, gc.IsNil)
-// 	c.Assert(addRes.Inserted, gc.HasLen, 1)
+func (s *S) TestType34v6(c *gc.C) {
+	log.Infof("starting TestType34v6")
+	// This is a v6 type 34 PQC primary key with a type 36 PQC encryption subkey  (draft-pqc appendix A.7)
+	doc := s.addKey(c, "pqc-test-key-v6type34+36.asc")
+	var addRes hkp.SubmissionResponse
+	err := json.Unmarshal(doc, &addRes)
+	c.Assert(err, gc.IsNil)
+	c.Assert(addRes.Inserted, gc.HasLen, 1)
 
-// 	records, err := s.storage.FetchRecordsByVfp([]string{"0672fff84863aeba67f0d1d7691173247dd427533b9d7ee76011c6f77f2ce9fa7a"})
-// 	c.Assert(len(records), gc.Equals, 1)
-// 	c.Assert(len(records[0].SubKeys), gc.Equals, 1)
-// 	c.Assert(records[0].SubKeys[0].Algorithm, gc.Equals, 36)
+	records, err := s.storage.FetchRecordsByVfp([]string{"0672fff84863aeba67f0d1d7691173247dd427533b9d7ee76011c6f77f2ce9fa7a"})
+	c.Assert(len(records), gc.Equals, 1)
+	c.Assert(len(records[0].SubKeys), gc.Equals, 1)
+	c.Assert(records[0].SubKeys[0].Algorithm, gc.Equals, 36)
 
-// 	s.assertKeyFPHasUIDv2(c, "06/72fff84863aeba67f0d1d7691173247dd427533b9d7ee76011c6f77f2ce9fa7a", "PQC user (Test Key) <pqc-test-key@example.com>", true)
-//	// v6 keys are not searchable by keyid (draft-hkp section 5.1.3)
-// 	s.assertIdentityReturnsKeyv2(c, "06/72fff84863aeba67f0d1d7691173247dd427533b9d7ee76011c6f77f2ce9fa7a", "pqc-test-key@example.com", true)
-// }
+	s.assertKeyFPHasUIDv2(c, "06/72fff84863aeba67f0d1d7691173247dd427533b9d7ee76011c6f77f2ce9fa7a", "PQC user (Test Key) <pqc-test-key@example.com>", true)
+	// v6 keys are not searchable by keyid (draft-hkp section 5.1.3)
+	s.assertIdentityReturnsKeyv2(c, "06/72fff84863aeba67f0d1d7691173247dd427533b9d7ee76011c6f77f2ce9fa7a", "pqc-test-key@example.com", true)
+}
 
 func (s *S) TestPrefixLog(c *gc.C) {
 	log.Infof("starting TestPrefixLog")
