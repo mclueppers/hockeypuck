@@ -79,15 +79,13 @@ type Peer struct {
 // These must match the running code, so are always added to the Filters in the Conflux configuration.
 // Conflux Filters are used to further restrict sync, e.g. to disconnect test nodes from production.
 //
-// TODO: how to capture supported algorithms? Defer to pm/gc versioning?
-// "pqcml" here means "the ML-DSA and ML-KEM algorithms from draft-ietf-openpgp-pqc", i.e. 30, 31, 35 and 36.
-// This is a limitation of pm/gc 1.4.1.
-// Beware that ML-DSA-SHAKE signatures are *enormous*, and so will require a filter bump if pm/gc adds support in the future.
+// "rfc9980" here means "the ML-DSA, SLH-DSA-SHAKE and ML-KEM algorithms from RFC9980", i.e. code points 30..36.
+// The additional PQC algorithms from draft-ietf-nist-bp-comp are not currently supported in go-crypto.
 var sksDefaultFilters = []string{
 	"schema:application/pgp-keys", // declare our dataset
 	"yminsky.merge",               // TPKs with same primary key are merged
 	"yminsky.dedup",               // packets are deduplicated on disk
-	"versions:3+4+6+pqcml",        // v5 support is currently futile, see https://lists.gnupg.org/pipermail/gnupg-users/2026-May/068298.html
+	"versions:3+4+6+rfc9980",      // v5 support is currently futile, see https://lists.gnupg.org/pipermail/gnupg-users/2026-May/068298.html
 	"drop:invalidSelfSig",         // self-signatures are validated
 	"drop:unparseable",            // unparseable packets are dropped
 	"drop:structuralMartian",      // signatures in an impossible place (according to SigType) are dropped

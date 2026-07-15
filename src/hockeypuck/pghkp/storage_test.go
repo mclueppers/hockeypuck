@@ -683,7 +683,7 @@ func (s *S) TestCv448v5(c *gc.C) {
 
 func (s *S) TestType35v6(c *gc.C) {
 	log.Infof("starting TestType35v6")
-	// This is a v6 ed25519 primary key with a type 35 PQC encryption subkey (draft-pqc appendix A.1)
+	// This is a v6 ed25519 primary key with a type 35 PQC encryption subkey (RFC9980 appendix A.1)
 	doc := s.addKey(c, "pqc-test-key-v6type35.asc")
 	var addRes hkp.SubmissionResponse
 	err := json.Unmarshal(doc, &addRes)
@@ -707,7 +707,7 @@ func (s *S) TestType35v6(c *gc.C) {
 
 func (s *S) TestType35(c *gc.C) {
 	log.Infof("starting TestType35")
-	// This is a v4 ed25519 primary key with a type 35 PQC encryption subkey (draft-pqc appendix A.2)
+	// This is a v4 ed25519 primary key with a type 35 PQC encryption subkey (RFC9980 appendix A.2)
 	doc := s.addKey(c, "pqc-test-key-v4type35.asc")
 	var addRes hkp.SubmissionResponse
 	err := json.Unmarshal(doc, &addRes)
@@ -728,7 +728,7 @@ func (s *S) TestType35(c *gc.C) {
 
 func (s *S) TestType30v6(c *gc.C) {
 	log.Infof("starting TestType30v6")
-	// This is a v6 type 30 PQC primary key with a type 35 PQC encryption subkey (draft-pqc appendix A.3)
+	// This is a v6 type 30 PQC primary key with a type 35 PQC encryption subkey (RFC9980 appendix A.3)
 	doc := s.addKey(c, "pqc-test-key-v6type30+35.asc")
 	var addRes hkp.SubmissionResponse
 	err := json.Unmarshal(doc, &addRes)
@@ -747,7 +747,7 @@ func (s *S) TestType30v6(c *gc.C) {
 
 func (s *S) TestType31v6(c *gc.C) {
 	log.Infof("starting TestType31v6")
-	// This is a v6 type 31 PQC primary key with a type 36 PQC encryption subkey (draft-pqc appendix A.4)
+	// This is a v6 type 31 PQC primary key with a type 36 PQC encryption subkey (RFC9980 appendix A.4)
 	doc := s.addKey(c, "pqc-test-key-v6type31+36.asc")
 	var addRes hkp.SubmissionResponse
 	err := json.Unmarshal(doc, &addRes)
@@ -766,7 +766,7 @@ func (s *S) TestType31v6(c *gc.C) {
 
 func (s *S) TestType32v6(c *gc.C) {
 	log.Infof("starting TestType32v6")
-	// This is a v6 type 32 PQC primary key with a type 35 PQC encryption subkey  (draft-pqc appendix A.5)
+	// This is a v6 type 32 PQC primary key with a type 35 PQC encryption subkey  (RFC9980 appendix A.5)
 	doc := s.addKey(c, "pqc-test-key-v6type32+35.asc")
 	var addRes hkp.SubmissionResponse
 	err := json.Unmarshal(doc, &addRes)
@@ -785,7 +785,7 @@ func (s *S) TestType32v6(c *gc.C) {
 
 func (s *S) TestType33v6(c *gc.C) {
 	log.Infof("starting TestType33v6")
-	// This is a v6 type 33 PQC primary key with a type 35 PQC encryption subkey  (draft-pqc appendix A.6)
+	// This is a v6 type 33 PQC primary key with a type 35 PQC encryption subkey  (RFC9980 appendix A.6)
 	doc := s.addKey(c, "pqc-test-key-v6type33+35.asc")
 	var addRes hkp.SubmissionResponse
 	err := json.Unmarshal(doc, &addRes)
@@ -804,7 +804,7 @@ func (s *S) TestType33v6(c *gc.C) {
 
 func (s *S) TestType34v6(c *gc.C) {
 	log.Infof("starting TestType34v6")
-	// This is a v6 type 34 PQC primary key with a type 36 PQC encryption subkey  (draft-pqc appendix A.7)
+	// This is a v6 type 34 PQC primary key with a type 36 PQC encryption subkey  (RFC9980 appendix A.7)
 	doc := s.addKey(c, "pqc-test-key-v6type34+36.asc")
 	var addRes hkp.SubmissionResponse
 	err := json.Unmarshal(doc, &addRes)
