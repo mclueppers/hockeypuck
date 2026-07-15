@@ -74,8 +74,6 @@ func (i InvalidArgumentError) Error() string {
 	return "openpgp: invalid argument: " + string(i)
 }
 
-var InvalidForwardeeKeyError = InvalidArgumentError("invalid forwardee key")
-
 // SignatureError indicates that a syntactically valid signature failed to
 // validate.
 type SignatureError string

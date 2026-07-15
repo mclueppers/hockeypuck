@@ -535,11 +535,6 @@ const (
 	PubKeyAlgoEd25519 PublicKeyAlgorithm = 27
 	PubKeyAlgoEd448   PublicKeyAlgorithm = 28
 
-	PubKeyAlgoAEAD PublicKeyAlgorithm = 128
-	PubKeyAlgoHMAC PublicKeyAlgorithm = 129
-	ExperimentalPubKeyAlgoAEAD PublicKeyAlgorithm = 100
-	ExperimentalPubKeyAlgoHMAC PublicKeyAlgorithm = 101
-
 	// Deprecated in RFC 4880, Section 13.5. Use key flags instead.
 	PubKeyAlgoRSAEncryptOnly PublicKeyAlgorithm = 2
 	PubKeyAlgoRSASignOnly    PublicKeyAlgorithm = 3
@@ -547,6 +542,9 @@ const (
 	// PQC DSA algorithms
 	PubKeyAlgoMldsa65Ed25519 = 30
 	PubKeyAlgoMldsa87Ed448   = 31
+	PubKeyAlgoSlhdsaShake128s = 32
+	PubKeyAlgoSlhdsaShake128f = 33
+	PubKeyAlgoSlhdsaShake256s = 34
 
 	// PQC KEM algorithms
 	PubKeyAlgoMlkem768X25519 = 35
@@ -557,9 +555,7 @@ const (
 // key of the given type.
 func (pka PublicKeyAlgorithm) CanEncrypt() bool {
 	switch pka {
-	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoElGamal, PubKeyAlgoECDH,
-		PubKeyAlgoX25519, PubKeyAlgoX448,
-		PubKeyAlgoAEAD, ExperimentalPubKeyAlgoAEAD,
+	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoElGamal, PubKeyAlgoECDH, PubKeyAlgoX25519, PubKeyAlgoX448,
 		PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448:
 		return true
 	}
@@ -572,8 +568,8 @@ func (pka PublicKeyAlgorithm) CanSign() bool {
 	switch pka {
 	case PubKeyAlgoRSA, PubKeyAlgoRSASignOnly, PubKeyAlgoDSA, PubKeyAlgoECDSA, PubKeyAlgoEdDSA,
 		PubKeyAlgoEd25519, PubKeyAlgoEd448,
-		PubKeyAlgoHMAC, ExperimentalPubKeyAlgoHMAC,
-		PubKeyAlgoMldsa65Ed25519, PubKeyAlgoMldsa87Ed448:
+		PubKeyAlgoMldsa65Ed25519, PubKeyAlgoMldsa87Ed448,
+		PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
 		return true
 	}
 	return false

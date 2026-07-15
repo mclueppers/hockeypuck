@@ -1,5 +1,5 @@
 // Package mlkem_ecdh implements hybrid ML-KEM + ECDH encryption, suitable for OpenPGP, experimental.
-// It follows the spec https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-composite-kem-schemes
+// It follows the spec https://www.rfc-editor.org/rfc/rfc9980.html#name-composite-kem-schemes
 package mlkem_ecdh
 
 import (
@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ProtonMail/go-crypto/openpgp/internal/encoding"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/ProtonMail/go-crypto/openpgp/aes/keywrap"
@@ -38,7 +37,7 @@ type PrivateKey struct {
 }
 
 // GenerateKey implements ML-KEM + ECC key generation as specified in
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-generation-procedure
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-generation-procedure
 func GenerateKey(rand io.Reader, algId uint8, c ecc.ECDHCurve, k kem.Scheme) (priv *PrivateKey, err error) {
 	priv = new(PrivateKey)
 
@@ -77,7 +76,7 @@ func (priv *PrivateKey) DeriveMlKemKeys(seed []byte, overridePublicKey bool) (er
 }
 
 // Encrypt implements ML-KEM + ECC encryption as specified in
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-encryption-procedure
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-encryption-procedure
 func Encrypt(rand io.Reader, pub *PublicKey, msg []byte) (kEphemeral, ecEphemeral, ciphertext []byte, err error) {
 	if len(msg) > maxSessionKeyLength {
 		return nil, nil, nil, goerrors.New("mlkem_ecdh: session key too long")
@@ -117,7 +116,7 @@ func Encrypt(rand io.Reader, pub *PublicKey, msg []byte) (kEphemeral, ecEphemera
 }
 
 // Decrypt implements ML-KEM + ECC decryption as specified in
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-decryption-procedure
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-decryption-procedure
 func Decrypt(priv *PrivateKey, kEphemeral, ecEphemeral, ciphertext []byte) (msg []byte, err error) {
 	// EC shared secret derivation
 	ecSS, err := priv.PublicKey.Curve.Decaps(ecEphemeral, priv.SecretEc)
@@ -140,7 +139,7 @@ func Decrypt(priv *PrivateKey, kEphemeral, ecEphemeral, ciphertext []byte) (msg 
 }
 
 // buildKey implements the composite KDF from
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-combiner
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-combiner
 func buildKey(pub *PublicKey, eccSecretPoint, eccCipherText, eccPublicKey, mlkemKeyShare []byte) ([]byte, error) {
 	/// Set the output `ecdhKeyShare` to `eccSecretPoint`
 	eccKeyShare := eccSecretPoint
@@ -213,16 +212,16 @@ func EncodeFields(w io.Writer, ec, ml, encryptedSessionKey []byte, cipherFunctio
 
 // DecodeFields decodes an ML-KEM + ECDH session key encryption fields as
 // ephemeral ECDH public key | ML-KEM ciphertext | follow byte length | cipherFunction (v3 only) | encryptedSessionKey.
-func DecodeFields(r io.Reader, lenEcc, lenMlkem int, v6 bool) (encryptedMPI1, encryptedMPI2, encryptedMPI3 encoding.Field, cipherFunction byte, err error) {
+func DecodeFields(r io.Reader, lenEcc, lenMlkem int, v6 bool) (ephemeralPublicEcc, ephemeralPublicMlKem, encryptedSessionKey []byte, cipherFunction byte, err error) {
 	var buf [1]byte
 
-	encryptedMPI1 = encoding.NewEmptyOctetArray(lenEcc)
-	if _, err = encryptedMPI1.ReadFrom(r); err != nil {
+	ephemeralPublicEcc = make([]byte, lenEcc)
+	if _, err = io.ReadFull(r, ephemeralPublicEcc); err != nil {
 		return
 	}
 
-	encryptedMPI2 = encoding.NewEmptyOctetArray(lenMlkem)
-	if _, err = encryptedMPI2.ReadFrom(r); err != nil {
+	ephemeralPublicMlKem = make([]byte, lenMlkem)
+	if _, err = io.ReadFull(r, ephemeralPublicMlKem); err != nil {
 		return
 	}
 
@@ -242,8 +241,8 @@ func DecodeFields(r io.Reader, lenEcc, lenMlkem int, v6 bool) (encryptedMPI1, en
 	}
 
 	// The encrypted session key.
-	encryptedMPI3 = encoding.NewEmptyOctetArray(int(followingLen))
-	if _, err = encryptedMPI3.ReadFrom(r); err != nil {
+	encryptedSessionKey = make([]byte, followingLen)
+	if _, err = io.ReadFull(r, encryptedSessionKey); err != nil {
 		return
 	}
 

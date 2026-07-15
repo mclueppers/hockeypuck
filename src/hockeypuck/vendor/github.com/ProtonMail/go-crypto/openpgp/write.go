@@ -575,6 +575,7 @@ func createSignaturePacket(signer *packet.PublicKey, sigType packet.SignatureTyp
 		Hash:              hash,
 		CreationTime:      config.Now(),
 		IssuerKeyId:       &signer.KeyId,
+		IssuerKeyVersion:  uint8(signer.Version),
 		IssuerFingerprint: signer.Fingerprint,
 		Notations:         config.Notations(),
 		SigLifetimeSecs:   &sigLifetimeSecs,
@@ -665,7 +666,7 @@ func selectHash(candidateHashes []byte, configuredHash crypto.Hash, signer *pack
 
 func acceptableHashesToWrite(singingKey *packet.PublicKey) []uint8 {
 	switch singingKey.PubKeyAlgo {
-	case packet.PubKeyAlgoEd448, packet.PubKeyAlgoMldsa87Ed448:
+	case packet.PubKeyAlgoEd448, packet.PubKeyAlgoMldsa87Ed448, packet.PubKeyAlgoSlhdsaShake256s:
 		return []uint8{
 			hashToHashId(crypto.SHA512),
 			hashToHashId(crypto.SHA3_512),
