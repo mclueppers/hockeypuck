@@ -24,7 +24,7 @@ We support marginalized communities in their need for secure communication.
 Bullying, abuse, hate speech, threats and antisocial behaviour will not be tolerated.
 Violations may result in immediate and permanent removal.
 
-## LLMs
+## LLM Agents
 
 We want to talk to you, not to your tools.
 LLM agents must not interact directly with the Hockeypuck project.
@@ -33,12 +33,14 @@ This includes, but is not limited to, PRs, issues, the wiki pages, the mailing l
 The sole exception to the above rule is GitHub Copilot.
 You may request PR reviews from Copilot, but in doing so you accept responsibility for checking its output before following its suggestions.
 
+## LLM Code Assistance
+
 If you submit code that has been written with LLM assistance, you take full responsibility for its quality and license compatibility.
 Your contributions must be submitted in your own name (or handle), not in the name of the tool you used.
 
 Non-trivial use of LLM code generation must be disclosed in commit and PR descriptions.
 Examples of trivial (and therefore exempt) use include typos, linting, renaming, non-semantic reordering, and minor changes affecting single lines of code.
-All LLM-assisted contributions must be peer-reviewed.
+All non-trivial LLM-assisted contributions must be peer-reviewed.
 
 The use of unedited LLM output in commentary is discouraged, as LLMs tend to produce overly verbose text.
 Please proofread and edit any natural-language output to make it as easy as possible for others to read.
