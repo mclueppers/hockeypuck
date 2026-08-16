@@ -469,8 +469,9 @@ If invoked when scenario 2, 3 or 6 is stable, the lookup should return success f
 0 get by-vfingerprint Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 0 get by-keyid Alice v2:        /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 
-0 index David v1:               uid:David Deluxe <david@openpgp.example>:1744774099::
-0 get David v1:                 /dev/stdin: PGP public key block
+0 index David v1:               curl: (22) The requested URL returned error: 404
+0 get David v1:                 curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 0 index David v2:               "keywords": "David Deluxe \u003cdavid@openpgp.example\u003e",
 0 get by-identity David v2:     /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
 0 get by-vfingerprint David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
@@ -486,8 +487,9 @@ If invoked when scenario 2, 3 or 6 is stable, the lookup should return success f
 1 get by-vfingerprint Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 1 get by-keyid Alice v2:        /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 
-1 index David v1:               uid:David Deluxe <david@openpgp.example>:1744774099::
-1 get David v1:                 /dev/stdin: PGP public key block
+1 index David v1:               curl: (22) The requested URL returned error: 404
+1 get David v1:                 curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 1 index David v2:               "keywords": "David Deluxe \u003cdavid@openpgp.example\u003e",
 1 get by-identity David v2:     /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
 1 get by-vfingerprint David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
@@ -503,8 +505,9 @@ If invoked when scenario 2, 3 or 6 is stable, the lookup should return success f
 2 get by-vfingerprint Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 2 get by-keyid Alice v2:        /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 
-2 index David v1:               uid:David Deluxe <david@openpgp.example>:1744774099::
-2 get David v1:                 /dev/stdin: PGP public key block
+2 index David v1:               curl: (22) The requested URL returned error: 404
+2 get David v1:                 curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 2 index David v2:               "keywords": "David Deluxe \u003cdavid@openpgp.example\u003e",
 2 get by-identity David v2:     /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
 2 get by-vfingerprint David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
@@ -520,8 +523,9 @@ If invoked when scenario 2, 3 or 6 is stable, the lookup should return success f
 3 get by-vfingerprint Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 3 get by-keyid Alice v2:        /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 
-3 index David v1:               uid:David Deluxe <david@openpgp.example>:1744774099::
-3 get David v1:                 /dev/stdin: PGP public key block
+3 index David v1:               curl: (22) The requested URL returned error: 404
+3 get David v1:                 curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 3 index David v2:               "keywords": "David Deluxe \u003cdavid@openpgp.example\u003e",
 3 get by-identity David v2:     /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
 3 get by-vfingerprint David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
@@ -548,25 +552,29 @@ If invoked when scenario 1 is stable, the following output is expected:
 0 submit David v2:            {"inserted":[{"version":6,"fingerprint":"4199d9eaa6682a78d5a534f62bf76222a54e4debc785dbe6a6c5b34586026fe2"}]}
 0 get by-identity Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 0 get by-identity David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
-0 get David v1:               /dev/stdin: PGP public key block
+0 get David v1:               curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 
 1 submit Alice v1:          {"inserted":[{"version":4,"fingerprint":"eb85bb5fa33a75e15e944e63f231550c4f47e38e"}]}
 1 submit David v2:            {"inserted":[{"version":6,"fingerprint":"4199d9eaa6682a78d5a534f62bf76222a54e4debc785dbe6a6c5b34586026fe2"}]}
 1 get by-identity Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 1 get by-identity David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
-1 get David v1:               /dev/stdin: PGP public key block
+1 get David v1:               curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 
 2 submit Alice v1:          {"inserted":[{"version":4,"fingerprint":"eb85bb5fa33a75e15e944e63f231550c4f47e38e"}]}
 2 submit David v2:            {"inserted":[{"version":6,"fingerprint":"4199d9eaa6682a78d5a534f62bf76222a54e4debc785dbe6a6c5b34586026fe2"}]}
 2 get by-identity Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 2 get by-identity David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
-2 get David v1:               /dev/stdin: PGP public key block
+2 get David v1:               curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 
 3 submit Alice v1:          {"inserted":[{"version":4,"fingerprint":"eb85bb5fa33a75e15e944e63f231550c4f47e38e"}]}
 3 submit David v2:            {"ignored":[{"version":6,"fingerprint":"4199d9eaa6682a78d5a534f62bf76222a54e4debc785dbe6a6c5b34586026fe2"}]}
 3 get by-identity Alice v2: /dev/stdin: OpenPGP Public Key Version 4, Created Tue Jan 22 11:56:25 2019, EdDSA; User ID; Signature; OpenPGP Certificate
 3 get by-identity David v2: /dev/stdin: OpenPGP Public Key Version 6, Created Wed Apr 16 03:28:19 2025, Unknown Algorithm (0x1b); Signature; User ID; OpenPGP Certificate
-3 get David v1:               /dev/stdin: PGP public key block
+3 get David v1:               curl: (22) The requested URL returned error: 404
+/dev/stdin: empty
 ~~~
 
 All `submit` tests should return either `"inserted"` or `"ignored"`, depending on whether the key was already present on that node, with the exception of "get David v1" which is expected to fail.
@@ -575,8 +583,6 @@ The `get` tests should always succeed, apart from "get David v1".
 
 Note that the output of the `get` tests may differ slightly between operating system versions, depending on the implementation of the `file` utility.
 The above output is correct for Debian 13.
-
-FIXME: "get David v1" is failing in a non-standard way - it's returning an empty armor block instead of throwing an HTTP error such as 404, which would be more polite.
 
 # Sample keys
 

@@ -707,7 +707,20 @@ func (h *Handler) index(w http.ResponseWriter, l *Lookup, f IndexFormat) {
 		f = jsonFormat
 	}
 
-	err = f.Write(w, l, keys)
+	// Drop v6 keys from the index in the legacy interface by default
+	safeKeys := []*openpgp.PrimaryKey{}
+	for _, key := range keys {
+		if key.Version < 6 {
+			safeKeys = append(safeKeys, key)
+		}
+	}
+	if len(safeKeys) == 0 {
+		httpError(w, http.StatusNotFound, errors.New("no keys left in legacy api"))
+		w.Write([]byte("Legacy HKP will not return keys >v5, to protect older clients\n"))
+		return
+	}
+
+	err = f.Write(w, l, safeKeys)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, errors.WithStack(err))
 		return
