@@ -244,7 +244,7 @@ On entering scenario 4, Alice's revocation key is submitted to hkp2.
 hkp1 and hkp3 will remove Alice's userid due to the (hard) revocation on her primary key.
 hkp0 and hkp2 will not remove her userid, because it matches an enumerable domain.
 
-The output will be the same as above, but Alice will not be listed in the `userids` test on nodes hkp0 and hkp2.
+The output will be the same as above, but Alice will not be listed in the `userids` test on nodes hkp1 and hkp3.
 
 ## Expected test output after 2 minutes
 
