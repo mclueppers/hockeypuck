@@ -134,9 +134,10 @@ func (s *SelfSigs) Valid() bool {
 //
 // BEWARE that a public key is only strictly valid if it has at least one self-signature,
 // i.e. either a direct sig, a UID certification or an sbind.
+// v6 keys must have at least one direct signature, but v4 keys are not required to have any.
 // We cannot test UID certifications or sbinds here, so we rely on evaporation elsewhere
 // to take care of invalid structure.
-// ValidSince() will therefore return success when called on a bare primary key.
+// ValidSince() will therefore return success when called on a bare v4 primary key.
 func (s *SelfSigs) ValidSince() (time.Time, bool) {
 	isValid := true
 	expiration, expires := s.ExpiresAt()
@@ -147,6 +148,16 @@ func (s *SelfSigs) ValidSince() (time.Time, bool) {
 		isValid = false
 	}
 	if pubkey, ok := s.target.(*PrimaryKey); ok {
+		// v6 primary keys must have at least one valid direct selfsig
+		if pubkey.Version >= 6 && len(s.Certifications) == 0 {
+			isValid = false
+		}
+		// Primary key material is valid since its creation date.
+		return pubkey.Creation, isValid
+	}
+	if pubkey, ok := s.target.(*PublicKey); ok {
+		// Subkey material is valid since its creation date.
+		// The caller should check that subkeys were not created before their primary.
 		return pubkey.Creation, isValid
 	}
 	createdAt := zeroTime
