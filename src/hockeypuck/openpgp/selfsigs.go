@@ -71,18 +71,6 @@ func (s checkSigCreationDesc) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
 }
 
-type checkSigExpirationDesc []*CheckSig
-
-func (s checkSigExpirationDesc) Len() int { return len(s) }
-
-func (s checkSigExpirationDesc) Less(i, j int) bool {
-	return s[j].Signature.Expiration.Before(s[i].Signature.Expiration)
-}
-
-func (s checkSigExpirationDesc) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
 func (s *SelfSigs) resolve() {
 	// Sort signatures
 	sort.Sort(checkSigCreationAsc(s.Revocations))
