@@ -98,11 +98,19 @@ func (policy *Policy) ValidSelfSigned(key *PrimaryKey, selfSignedOnly bool) erro
 			log.Debugf("Dropped direct revocation sig because %s", checkSig.Error.Error())
 		}
 	}
+certloop:
 	for _, checkSig := range ss.Certifications {
 		if checkSig.Error == nil {
 			certs = append(certs, checkSig.Signature)
+			switch checkSig.Signature.Algorithm {
+			case packet.PubKeyAlgoSlhdsaShake128s, packet.PubKeyAlgoSlhdsaShake128f, packet.PubKeyAlgoSlhdsaShake256s:
+				// Only keep the most recent signature, because these are *monsters*
+				// See https://mailarchive.ietf.org/arch/msg/openpgp/kA4YtiP3j8LJUift1_D0mWIHVV0/
+				log.Debugf("Dropping older direct signatures using large algorithms")
+				break certloop
+			}
 		} else {
-			log.Debugf("Dropped direct certification sig because %s", checkSig.Error.Error())
+			log.Debugf("Dropped direct sig because %s", checkSig.Error.Error())
 		}
 	}
 	key.Signatures = certs
@@ -200,11 +208,19 @@ func (uid *UserID) Valid(key *PrimaryKey, selfSignedOnly bool) (ok bool) {
 			log.Debugf("Dropped revocation sig on uid '%s' because %s", uid.Keywords, checkSig.Error.Error())
 		}
 	}
+certloop:
 	for _, checkSig := range ss.Certifications {
 		if checkSig.Error == nil {
 			certs = append(certs, checkSig.Signature)
+			switch checkSig.Signature.Algorithm {
+			case packet.PubKeyAlgoSlhdsaShake128s, packet.PubKeyAlgoSlhdsaShake128f, packet.PubKeyAlgoSlhdsaShake256s:
+				// Only keep the most recent signature, because these are *monsters*
+				// See https://mailarchive.ietf.org/arch/msg/openpgp/kA4YtiP3j8LJUift1_D0mWIHVV0/
+				log.Debugf("Dropping older self-certs using large algorithms")
+				break certloop
+			}
 		} else {
-			log.Debugf("Dropped certification sig on uid '%s' because %s", uid.Keywords, checkSig.Error.Error())
+			log.Debugf("Dropped self-cert on uid '%s' because %s", uid.Keywords, checkSig.Error.Error())
 		}
 	}
 	if len(certs) > 0 {
@@ -239,11 +255,20 @@ func (subKey *SubKey) Valid(key *PrimaryKey, selfSignedOnly bool) (ok bool) {
 			log.Debugf("Dropped revocation sig on subkey %s because %s", subKey.KeyID, checkSig.Error.Error())
 		}
 	}
+certloop:
 	for _, checkSig := range ss.Certifications {
 		if checkSig.Error == nil {
 			certs = append(certs, checkSig.Signature)
+			switch checkSig.Signature.Algorithm {
+			case packet.PubKeyAlgoSlhdsaShake128s, packet.PubKeyAlgoSlhdsaShake128f, packet.PubKeyAlgoSlhdsaShake256s:
+				// Only keep the most recent signature, because these are *monsters*
+				// See https://mailarchive.ietf.org/arch/msg/openpgp/kA4YtiP3j8LJUift1_D0mWIHVV0/
+				log.Errorf("GOT HERE")
+				log.Debugf("Dropping older binding sigs using large algorithms")
+				break certloop
+			}
 		} else {
-			log.Debugf("Dropped certification sig on subkey %s because %s", subKey.KeyID, checkSig.Error.Error())
+			log.Debugf("Dropped binding sig on subkey %s because %s", subKey.KeyID, checkSig.Error.Error())
 		}
 	}
 	if len(certs) > 0 {

@@ -452,6 +452,7 @@ func (s *HandlerSuite) TestIndexAlicev2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 24,
 						"issuerKeyID": "361bc1f023e0dcca",
 						"creation": "2012-08-21T22:59:05Z",
@@ -473,6 +474,7 @@ func (s *HandlerSuite) TestIndexAlicev2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "361bc1f023e0dcca",
 						"creation": "2012-08-21T22:59:05Z",
@@ -482,6 +484,7 @@ func (s *HandlerSuite) TestIndexAlicev2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 16,
 						"issuerKeyID": "62aea01d67640fb5",
 						"creation": "2012-08-22T01:10:11Z",
@@ -550,6 +553,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -561,6 +565,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -572,6 +577,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -583,6 +589,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -594,6 +601,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -605,6 +613,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -616,6 +625,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -627,6 +637,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "2839fe0d796198b1",
 						"issuerFingerprint": "abd00913019d6354ba1d9a132839fe0d796198b1",
@@ -638,6 +649,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 16,
 						"issuerKeyID": "08c170de55ec123a",
 						"issuerFingerprint": "36653e1122c08bcea16d152908c170de55ec123a",
@@ -649,6 +661,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 16,
 						"issuerKeyID": "100565ab52446cb4",
 						"issuerFingerprint": "224b35a9a34e37be417b3491100565ab52446cb4",
@@ -660,6 +673,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "df84256885283521",
 						"issuerFingerprint": "3408b1b906eb579b41d9cb0cdf84256885283521",
@@ -671,6 +685,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 18,
 						"issuerKeyID": "a3c12d350d05ee04",
 						"issuerFingerprint": "732775736667a75336b64b7ea3c12d350d05ee04",
@@ -682,6 +697,7 @@ func (s *HandlerSuite) TestIndexKeyExpiryv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 16,
 						"issuerKeyID": "1f3d03348db1a3e2",
 						"issuerFingerprint": "5ef3a41171bb77e6110ed2d01f3d03348db1a3e2",
@@ -741,6 +757,7 @@ func (s *HandlerSuite) TestIndexKeyRevocationv2(c *gc.C) {
 				"packet": {
 					"tag": 2
 				},
+				"version": 4,
 				"sigType": 32,
 				"revocation": true,
 				"issuerKeyID": "7c330458a06e162f",
@@ -772,6 +789,7 @@ func (s *HandlerSuite) TestIndexKeyRevocationv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 24,
 						"issuerKeyID": "7c330458a06e162f",
 						"issuerFingerprint": "2d4b859915bf2213880748ae7c330458a06e162f",
@@ -852,6 +870,7 @@ func (s *HandlerSuite) TestIndexUidRevocationv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 24,
 						"issuerKeyID": "ebed28c0696c022c",
 						"issuerFingerprint": "9a86c636b3f0f94ec6b42e6bebed28c0696c022c",
@@ -875,6 +894,7 @@ func (s *HandlerSuite) TestIndexUidRevocationv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 48,
 						"revocation": true,
 						"issuerKeyID": "ebed28c0696c022c",
@@ -887,6 +907,7 @@ func (s *HandlerSuite) TestIndexUidRevocationv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"issuerKeyID": "ebed28c0696c022c",
 						"issuerFingerprint": "9a86c636b3f0f94ec6b42e6bebed28c0696c022c",
@@ -908,6 +929,7 @@ func (s *HandlerSuite) TestIndexUidRevocationv2(c *gc.C) {
 						"packet": {
 							"tag": 2
 						},
+						"version": 4,
 						"sigType": 19,
 						"primary": true,
 						"issuerKeyID": "ebed28c0696c022c",

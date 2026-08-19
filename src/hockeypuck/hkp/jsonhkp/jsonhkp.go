@@ -190,8 +190,13 @@ func NewUserID(from *openpgp.UserID) *UserID {
 	return to
 }
 
+// Note that openpgp.Signature has an Algorithm field, however we ignore it here.
+// This is because the jsonhkp.Algorithm type requires a BitLen or Curve value
+// and openpgp.Signature does not currently support them.
+
 type Signature struct {
 	Packet            *Packet  `json:"packet,omitempty"`
+	Version           uint8    `json:"version"`
 	SigType           int      `json:"sigType"`
 	Revocation        bool     `json:"revocation,omitempty"`
 	Primary           bool     `json:"primary,omitempty"`
@@ -208,6 +213,7 @@ type Signature struct {
 func NewSignature(from *openpgp.Signature) *Signature {
 	to := &Signature{
 		Packet:            NewPacket(&from.Packet),
+		Version:           from.Version,
 		SigType:           int(from.SigType),
 		IssuerKeyID:       from.IssuerKeyID,
 		IssuerFingerprint: from.IssuerFingerprint,
