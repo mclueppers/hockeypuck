@@ -86,6 +86,7 @@ var sksDefaultFilters = []string{
 	"yminsky.merge",               // TPKs with same primary key are merged
 	"yminsky.dedup",               // packets are deduplicated on disk
 	"versions:3+4+6+rfc9980",      // v5 support is currently futile, see https://lists.gnupg.org/pipermail/gnupg-users/2026-May/068298.html
+	"drop:oldSlhdsaSelfSig",       // only keep the most recent selfsigs on SLH-DSA keys, see https://mailarchive.ietf.org/arch/msg/openpgp/kA4YtiP3j8LJUift1_D0mWIHVV0/
 	"drop:invalidSelfSig",         // self-signatures are validated
 	"drop:unparseable",            // unparseable packets are dropped
 	"drop:structuralMartian",      // signatures in an impossible place (according to SigType) are dropped
