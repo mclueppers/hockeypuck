@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -128,6 +129,7 @@ func writeKeys(st storage.Queryer, digests []string, num, chunksize int) error {
 		return errors.WithStack(err)
 	}
 	defer f.Close()
+	var chunkId int
 
 	for len(digests) > 0 {
 		var chunk []string
@@ -143,6 +145,24 @@ func writeKeys(st storage.Queryer, digests []string, num, chunksize int) error {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		if len(records) < len(chunk) {
+			fmt.Printf("WARNING: fetched fewer records than expected (%d < %d) in file %04d chunk %d\nmissing: ", len(records), len(chunk), num, chunkId)
+			var gotChunk []string
+			for _, record := range records {
+				gotChunk = append(gotChunk, record.MD5)
+			}
+			slices.Sort(chunk)
+			slices.Sort(gotChunk)
+			var i int
+			for _, md5 := range chunk {
+				for gotChunk[i] != md5 {
+					fmt.Printf("%s ", md5)
+					i++
+				}
+				i++
+			}
+			fmt.Printf("\n")
+		}
 		for _, record := range records {
 			if record.PrimaryKey != nil {
 				err := openpgp.WritePackets(f, record.PrimaryKey)
@@ -151,6 +171,7 @@ func writeKeys(st storage.Queryer, digests []string, num, chunksize int) error {
 				}
 			}
 		}
+		chunkId++
 	}
 	return nil
 }
