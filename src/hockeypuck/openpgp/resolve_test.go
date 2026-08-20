@@ -442,9 +442,9 @@ func (s *ResolveSuite) TestCleanupSlhdsaSelfsigs(c *gc.C) {
 
 	key := MustInputAscKey("slhdsa-test-key-multisig.asc")
 	c.Assert(key.Signatures, gc.HasLen, 2)
-	c.Assert(key.Signatures[0].Creation, gc.Equals, time.Date(2026, time.August, 18, 13, 0, 38, 0, time.Local))
-	c.Assert(key.Signatures[1].Creation, gc.Equals, time.Date(2026, time.August, 18, 13, 0, 47, 0, time.Local))
+	c.Assert(key.Signatures[0].Creation.UTC(), gc.Equals, time.Date(2026, time.August, 18, 12, 0, 38, 0, time.UTC))
+	c.Assert(key.Signatures[1].Creation.UTC(), gc.Equals, time.Date(2026, time.August, 18, 12, 0, 47, 0, time.UTC))
 	c.Assert(policy.ValidSelfSigned(key, false), gc.IsNil)
 	c.Assert(key.Signatures, gc.HasLen, 1)
-	c.Assert(key.Signatures[0].Creation, gc.Equals, time.Date(2026, time.August, 18, 13, 0, 47, 0, time.Local))
+	c.Assert(key.Signatures[0].Creation.UTC(), gc.Equals, time.Date(2026, time.August, 18, 12, 0, 47, 0, time.UTC))
 }
