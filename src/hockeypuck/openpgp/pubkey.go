@@ -349,6 +349,9 @@ func (pubkey *PrimaryKey) setPublicKeyV3(pk *packet.PublicKeyV3) error {
 	return pubkey.PublicKey.setPublicKeyV3(pk)
 }
 
+// SigInfo separates self-signatures from third-party signatures.
+// It throws away invalid self-signatures and implausible third-party signatures.
+// It returns a (sorted) SelfSigs object, and an (unsorted) array of third-party sigs.
 func (pubkey *PrimaryKey) SigInfo() (*SelfSigs, []*Signature) {
 	selfSigs := &SelfSigs{target: pubkey}
 	var otherSigs []*Signature

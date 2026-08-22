@@ -141,6 +141,9 @@ func (uid *UserID) setUserID(u *packet.UserId) (err error) {
 	return
 }
 
+// SigInfo separates self-signatures from third-party signatures.
+// It throws away invalid self-signatures and implausible third-party signatures.
+// It returns a (sorted) SelfSigs object, and an (unsorted) array of third-party sigs.
 func (uid *UserID) SigInfo(pubkey *PrimaryKey) (*SelfSigs, []*Signature) {
 	selfSigs := &SelfSigs{target: uid}
 	var otherSigs []*Signature

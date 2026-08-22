@@ -27,10 +27,16 @@ import (
 	"github.com/pkg/errors"
 )
 
+// Note that a faithful representation of all Algorithms also requires
+// BitLen and Curve fields, however these are non-trivial to extract
+// from packet.Signature and so we do not (yet) implement them.
+
 type Signature struct {
 	Packet
 
 	SigType           packet.SignatureType
+	Version           uint8
+	Algorithm         packet.PublicKeyAlgorithm
 	IssuerKeyID       string
 	IssuerFpVersion   uint8
 	IssuerFingerprint string
@@ -130,6 +136,8 @@ func (sig *Signature) setSignature(s *packet.Signature, keyCreationTime time.Tim
 	}
 	sig.Creation = s.CreationTime
 	sig.SigType = s.SigType
+	sig.Version = uint8(s.Version)
+	sig.Algorithm = s.PubKeyAlgo
 	sig.RevocationReason = s.RevocationReason
 	// PolicyURI is only used for display, so we can ignore errors
 	sig.PolicyURI, _ = CleanUtf8(s.PolicyURI)
@@ -172,6 +180,8 @@ func (sig *Signature) setSignatureV3(s *packet.SignatureV3) error {
 	sig.Creation = s.CreationTime
 	// V3 packets do not have an expiration time
 	sig.SigType = s.SigType
+	sig.Version = 3
+	sig.Algorithm = s.PubKeyAlgo
 	// Extract the issuer key id
 	var issuerKeyId [8]byte
 	binary.BigEndian.PutUint64(issuerKeyId[:], s.IssuerKeyId)

@@ -433,3 +433,18 @@ func (s *ResolveSuite) TestMergeDeduplicatesRedactedUserIDs(c *gc.C) {
 	c.Assert(onDisk.RedactedUserIDs[0].Keywords, gc.Equals, "test@example.org")
 	c.Assert(onDisk.Trusts, gc.HasLen, 1)
 }
+
+// TestCleanupSlhdsaSelfsigs checks whether ValidSelfSigned discards older self-sigs on SLH-DSA keys.
+// This is necessary to keep the sizes of SLH-DSA keys manageable.
+func (s *ResolveSuite) TestCleanupSlhdsaSelfsigs(c *gc.C) {
+	policy, err := NewPolicy()
+	c.Assert(err, gc.IsNil)
+
+	key := MustInputAscKey("slhdsa-test-key-multisig.asc")
+	c.Assert(key.Signatures, gc.HasLen, 2)
+	c.Assert(key.Signatures[0].Creation.UTC(), gc.Equals, time.Date(2026, time.August, 18, 12, 0, 38, 0, time.UTC))
+	c.Assert(key.Signatures[1].Creation.UTC(), gc.Equals, time.Date(2026, time.August, 18, 12, 0, 47, 0, time.UTC))
+	c.Assert(policy.ValidSelfSigned(key, false), gc.IsNil)
+	c.Assert(key.Signatures, gc.HasLen, 1)
+	c.Assert(key.Signatures[0].Creation.UTC(), gc.Equals, time.Date(2026, time.August, 18, 12, 0, 47, 0, time.UTC))
+}
