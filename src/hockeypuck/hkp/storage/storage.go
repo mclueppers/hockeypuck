@@ -32,6 +32,12 @@ var ErrKeyNotFound = fmt.Errorf("key not found")
 var ErrDigestMismatch = fmt.Errorf("digest mismatch")
 var AutoPreen = "AutoPreen"
 
+// IncludeTombstones asks a query to return blocklist tombstones alongside key
+// material. Reconciliation and dumps need them, because a tombstone is part of
+// the dataset this node holds; HKP lookups must not see them, because to a
+// client a blocked key is simply absent.
+var IncludeTombstones = "IncludeTombstones"
+
 func IsNotFound(err error) bool {
 	return errors.Is(err, ErrKeyNotFound)
 }
@@ -265,6 +271,27 @@ func (knc KeyNotChanged) RemoveDigests() []string { return nil }
 
 func (knc KeyNotChanged) String() string {
 	return fmt.Sprintf("key 0x%s with hash %s not changed", knc.ID, knc.Digest)
+}
+
+// KeyBlocked reports that incoming key material was refused because this server
+// holds a blocklist tombstone for its fingerprint.
+//
+// It inserts no digest. KeyNotChanged would be the closest existing outcome, but
+// the reconciliation peer answers that one by adding the offered digest to the
+// prefix tree, which would leave this node advertising key material it has just
+// refused to store.
+type KeyBlocked struct {
+	ID string
+	// Digest is the tombstone's digest, not that of the refused key.
+	Digest string
+}
+
+func (kb KeyBlocked) InsertDigests() []string { return nil }
+
+func (kb KeyBlocked) RemoveDigests() []string { return nil }
+
+func (kb KeyBlocked) String() string {
+	return fmt.Sprintf("key 0x%s refused; blocklisted with tombstone %s", kb.ID, kb.Digest)
 }
 
 type KeyRemoved struct {

@@ -48,7 +48,10 @@ import (
 func (st *storage) mergeStoredKey(pubkey *openpgp.PrimaryKey) (kc hkpstorage.KeyChange, err error) {
 	var lastRecord *hkpstorage.Record
 	// Don't use AutoPreen, as this can cause double-updates. We explicitly call preen() below.
-	lastRecords, err := st.FetchRecordsByFp([]string{pubkey.Fingerprint})
+	// Tombstones are included because they are precisely what we need to see here:
+	// the stored row for a blocked fingerprint is a tombstone, and the ordinary
+	// key material queries hide it.
+	lastRecords, err := st.FetchRecordsByFp([]string{pubkey.Fingerprint}, hkpstorage.IncludeTombstones)
 	if err == nil {
 		// match primary fingerprint -- someone might have reused a subkey somewhere
 		err = hkpstorage.ErrKeyNotFound
@@ -62,6 +65,15 @@ func (st *storage) mergeStoredKey(pubkey *openpgp.PrimaryKey) (kc hkpstorage.Key
 	}
 	if err != nil {
 		return nil, errors.WithStack(err)
+	}
+
+	if openpgp.IsTombstone(lastRecord.PrimaryKey) && !openpgp.IsTombstone(pubkey) {
+		// The fingerprint is blocked. Refusing here rather than at ingest means
+		// every route into storage is covered by the one check, and it costs
+		// nothing extra: the lookup has already happened because the insert
+		// collided with the tombstone's row.
+		log.Debugf("refused blocked key fp=%s", pubkey.Fingerprint)
+		return hkpstorage.KeyBlocked{ID: pubkey.KeyID, Digest: lastRecord.MD5}, nil
 	}
 
 	if pubkey.UUID != lastRecord.UUID {

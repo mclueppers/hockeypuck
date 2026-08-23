@@ -942,6 +942,8 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 			result.Updated = append(result.Updated, summary(key, ""))
 		case storage.KeyNotChanged:
 			result.Ignored = append(result.Ignored, summary(key, ""))
+		case storage.KeyBlocked:
+			result.Ignored = append(result.Ignored, summary(key, "blocklisted"))
 		}
 	}
 	log.WithFields(log.Fields{
@@ -1020,6 +1022,8 @@ func (h *Handler) Replace(w http.ResponseWriter, r *http.Request, _ httprouter.P
 			result.Updated = append(result.Updated, summary(key, ""))
 		case storage.KeyNotChanged:
 			result.Ignored = append(result.Ignored, summary(key, ""))
+		case storage.KeyBlocked:
+			result.Ignored = append(result.Ignored, summary(key, "blocklisted"))
 		}
 	}
 	log.WithFields(log.Fields{
@@ -1089,6 +1093,8 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request, _ httprouter.Pa
 			result.Deleted = append(result.Deleted, summary(key, ""))
 		case storage.KeyNotChanged:
 			result.Ignored = append(result.Ignored, summary(key, ""))
+		case storage.KeyBlocked:
+			result.Ignored = append(result.Ignored, summary(key, "blocklisted"))
 		}
 	}
 
