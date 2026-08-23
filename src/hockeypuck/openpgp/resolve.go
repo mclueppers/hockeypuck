@@ -69,6 +69,13 @@ func (p Policy) IsPersistable(uid *UserID) bool {
 // NB: this is a misnomer, as it also enforces the structural correctness ("plausibility") of third-party sigs and trust packets,
 // and updates the Expiration, IsRevoked and ValidSince fields of each component.
 func (policy *Policy) ValidSelfSigned(key *PrimaryKey, selfSignedOnly bool) error {
+	if IsTombstone(key) {
+		// A tombstone asserts that a key is blocked; it carries no key material
+		// and so has no self-signatures to validate. What vouches for it is the
+		// origin signature, checked by the caller against its trusted origins.
+		return nil
+	}
+
 	// Process direct signatures first
 	ss, others := key.SigInfo()
 	var certs []*Signature
