@@ -261,8 +261,8 @@ func (trust *Trust) isChildOf(op *packet.OpaquePacket) bool {
 }
 
 // trustPacketSKSView returns the SKS view of an opaque packet `op`.
-// IFF `op` is a noisy SKS trust packet, truncate to the end of its first subpacket.
-// `op` will be modified in the process. Otherwise, return nil.
+// IFF `op` is a noisy SKS trust packet, return a view truncated to the end of its
+// first subpacket. `op` itself is left intact. Otherwise, return nil.
 func trustPacketSKSView(op *packet.OpaquePacket) *packet.OpaquePacket {
 	if op.Tag != 12 {
 		log.Warnf("non-trust packet passed to trustPacketSKSView")
@@ -298,8 +298,12 @@ func trustPacketSKSView(op *packet.OpaquePacket) *packet.OpaquePacket {
 				uint32(op.Contents[10])
 			lengthOfLength = 5
 		}
-		op.Contents = op.Contents[:length+lengthOfLength+6]
-		return op
+		// Return a view rather than truncating in place. SksDigest stores the
+		// full packet for the trust digest before calling this, so truncating
+		// the caller's packet would leave that digest covering only the prefix.
+		view := *op
+		view.Contents = op.Contents[:length+lengthOfLength+6]
+		return &view
 	case trustAppContextQuietSKS:
 		// quiet SKS should be silently ignored
 		return nil
