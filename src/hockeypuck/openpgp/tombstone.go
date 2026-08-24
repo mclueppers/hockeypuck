@@ -294,3 +294,96 @@ func parseTombstoneCert(op *packet.OpaquePacket) (*PrimaryKey, error) {
 	}
 	return pubkey, nil
 }
+
+// publicKeyPacket returns the parsed public key packet for a component key.
+func publicKeyPacket(pub *PublicKey) (*packet.PublicKey, error) {
+	op, err := pub.opaquePacket()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	parsed, err := op.Parse()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	pk, ok := parsed.(*packet.PublicKey)
+	if !ok {
+		return nil, errors.WithStack(ErrInvalidPacketType)
+	}
+	return pk, nil
+}
+
+// VerifyTombstone reports the fingerprint of the trusted key that vouches for a
+// tombstone, or an error if none does.
+//
+// This is what makes the origin notation mean anything. Without it a tombstone
+// asserts an origin that any node could have written, and a peer accepting on
+// the strength of that name alone would take a block from anyone willing to
+// type it. With it, accepting a tombstone means the named origin really did
+// issue this block for this fingerprint, whoever passed it along.
+//
+// The caller supplies the keys it trusts for the tombstone's origin; deciding
+// which those are is configuration, not cryptography.
+func VerifyTombstone(ts Tombstone, sigs []*Signature, trusted []*PrimaryKey) (string, error) {
+	if err := ts.Validate(); err != nil {
+		return "", errors.WithStack(err)
+	}
+	if len(sigs) == 0 {
+		return "", errors.Errorf("tombstone for 0x%s carries no signature", ts.Fingerprint)
+	}
+	if len(trusted) == 0 {
+		return "", errors.Errorf("no keys are trusted for origin %q", ts.Origin)
+	}
+	message := ts.SigningMessage()
+
+	var lastErr error
+	for _, sig := range sigs {
+		s, err := sig.signaturePacket()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		// The signing message is a bare byte string, so only a binary document
+		// signature can be over it. Accepting other types would let a signature
+		// made for some other purpose be replayed as a block.
+		if s.SigType != packet.SigTypeBinary {
+			lastErr = errors.Errorf("tombstone signature has type %d, want a binary document signature", s.SigType)
+			continue
+		}
+		if !s.Hash.Available() {
+			lastErr = errors.Errorf("tombstone signature uses unavailable hash %v", s.Hash)
+			continue
+		}
+		for _, key := range trusted {
+			// A signing subkey is the usual arrangement, so try those too.
+			candidates := []*PublicKey{&key.PublicKey}
+			for i := range key.SubKeys {
+				candidates = append(candidates, &key.SubKeys[i].PublicKey)
+			}
+			for _, candidate := range candidates {
+				pub, err := publicKeyPacket(candidate)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+				if !pub.CanSign() {
+					continue
+				}
+				h := s.Hash.New()
+				if _, err := h.Write(message); err != nil {
+					lastErr = err
+					continue
+				}
+				if err := pub.VerifySignature(h, s); err != nil {
+					lastErr = err
+					continue
+				}
+				return key.Fingerprint, nil
+			}
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no trusted key matched")
+	}
+	return "", errors.Wrapf(lastErr, "no trusted signature on tombstone for 0x%s claiming origin %q",
+		ts.Fingerprint, ts.Origin)
+}
