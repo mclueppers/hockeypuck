@@ -138,3 +138,34 @@ func (s *TombstoneVerifySuite) TestCaseFoldingDoesNotBreakVerification(c *gc.C) 
 	_, err := VerifyTombstone(lower, []*Signature{sig}, []*PrimaryKey{pub})
 	c.Check(err, gc.IsNil)
 }
+
+// TestSignThenVerifyRoundTrip closes the loop: what SignTombstone produces is
+// what VerifyTombstone accepts, so the tooling that issues blocks and the
+// server that admits them agree.
+func (s *TombstoneVerifySuite) TestSignThenVerifyRoundTrip(c *gc.C) {
+	entity, pub := s.originKey(c)
+	ts := Tombstone{Fingerprint: tsFpA, Origin: "pgpkeys.eu", Reason: "abuse"}
+
+	sig, err := SignTombstone(ts, entity)
+	c.Assert(err, gc.IsNil)
+
+	tombstone, err := NewTombstone(ts, sig)
+	c.Assert(err, gc.IsNil)
+
+	var buf bytes.Buffer
+	c.Assert(WritePackets(&buf, tombstone), gc.IsNil)
+	received, err := NewKeyReader(bytes.NewReader(buf.Bytes())).Read()
+	c.Assert(err, gc.IsNil)
+	c.Assert(received, gc.HasLen, 1)
+
+	gotTS, gotSigs, err := TombstoneOf(received[0])
+	c.Assert(err, gc.IsNil)
+	fp, err := VerifyTombstone(*gotTS, gotSigs, []*PrimaryKey{pub})
+	c.Assert(err, gc.IsNil)
+	c.Check(fp, gc.Equals, pub.Fingerprint)
+}
+
+func (s *TombstoneVerifySuite) TestSignRequiresAPrivateKey(c *gc.C) {
+	_, err := SignTombstone(Tombstone{Fingerprint: tsFpA, Origin: "x"}, nil)
+	c.Check(err, gc.ErrorMatches, ".*requires a private key.*")
+}

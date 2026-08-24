@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	gocrypto "github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/pkg/errors"
 )
@@ -386,4 +387,32 @@ func VerifyTombstone(ts Tombstone, sigs []*Signature, trusted []*PrimaryKey) (st
 	}
 	return "", errors.Wrapf(lastErr, "no trusted signature on tombstone for 0x%s claiming origin %q",
 		ts.Fingerprint, ts.Origin)
+}
+
+// SignTombstone signs a tombstone with the given key, binding that key's origin
+// to this block. The signature is over ts.SigningMessage(), so it covers every
+// field the tombstone asserts and cannot be moved to another block.
+//
+// The signer must hold a private key; on a keyserver that means this is done by
+// an operator's tooling rather than by the server itself.
+func SignTombstone(ts Tombstone, signer *gocrypto.Entity) (*Signature, error) {
+	if err := ts.Validate(); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if signer == nil || signer.PrivateKey == nil {
+		return nil, errors.New("signing a tombstone requires a private key")
+	}
+	var buf bytes.Buffer
+	if err := gocrypto.DetachSign(&buf, signer, bytes.NewReader(ts.SigningMessage()), nil); err != nil {
+		return nil, errors.Wrap(err, "cannot sign tombstone")
+	}
+	op, err := newOpaquePacket(buf.Bytes())
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	sig, err := ParseSignature(op, time.Time{}, "", "")
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return sig, nil
 }
