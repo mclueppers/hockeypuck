@@ -135,6 +135,9 @@ func (st *storage) mergeStoredKey(pubkey *openpgp.PrimaryKey) (kc hkpstorage.Key
 // the stored copy according to the storage's merge policy. It notifies
 // subscribers and returns the resulting KeyChange.
 func (st *storage) Upsert(pubkey *openpgp.PrimaryKey) (hkpstorage.KeyChange, error) {
+	if err := st.admitTombstone(pubkey); err != nil {
+		return nil, errors.WithStack(err)
+	}
 	needUpsert, err := st.insertKey(pubkey)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -253,6 +256,10 @@ var errTargetMissing = errors.New("errTargetMissing")
 func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 	var result hkpstorage.InsertError
 
+	// Filter here rather than below, so that the bulk path is covered as well
+	// as the one-at-a-time fallback.
+	keys = st.admitTombstones(keys, &result)
+
 	bulkOK, bulkSkip := false, false
 	if len(keys) >= minKeys2UseBulk {
 		// Attempt bulk insertion
@@ -306,6 +313,9 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 }
 
 func (st *storage) Replace(key *openpgp.PrimaryKey) (_ hkpstorage.KeyChange, retErr error) {
+	if err := st.admitTombstone(key); err != nil {
+		return nil, errors.WithStack(err)
+	}
 	tx, err := st.Begin()
 	if err != nil {
 		return nil, errors.WithStack(err)

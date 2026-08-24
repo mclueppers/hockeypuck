@@ -18,6 +18,8 @@
 package openpgp
 
 import (
+	"strings"
+
 	log "github.com/sirupsen/logrus"
 
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
@@ -30,11 +32,17 @@ var ErrKeyEvaporated = errors.Errorf("no valid self-signatures")
 // This permits fine-grained control over how validation is performed at depth.
 type Policy struct {
 	enumDomains map[string]bool
+	// blocklistOrigin names this node on the tombstones it issues.
+	blocklistOrigin string
+	// trustedOrigins maps a blocklist origin to the key fingerprints allowed
+	// to sign for it. Nothing is trusted unless an operator says so.
+	trustedOrigins map[string][]string
 }
 
 func NewPolicy(options ...PolicyOption) (*Policy, error) {
 	p := &Policy{
-		enumDomains: map[string]bool{},
+		enumDomains:    map[string]bool{},
+		trustedOrigins: map[string][]string{},
 	}
 	for _, option := range options {
 		err := option(p)
@@ -54,6 +62,41 @@ func EnumerableDomains(enumDomains []string) PolicyOption {
 		}
 		return nil
 	}
+}
+
+// BlocklistOrigin sets the name this node stamps on tombstones it issues.
+func BlocklistOrigin(origin string) PolicyOption {
+	return func(p *Policy) error {
+		p.blocklistOrigin = strings.ToLower(strings.TrimSpace(origin))
+		return nil
+	}
+}
+
+// TrustBlocklistOrigin declares which keys may sign for a blocklist origin.
+func TrustBlocklistOrigin(origin string, fingerprints []string) PolicyOption {
+	return func(p *Policy) error {
+		origin = strings.ToLower(strings.TrimSpace(origin))
+		if origin == "" {
+			return errors.New("cannot trust an empty blocklist origin")
+		}
+		for _, fp := range fingerprints {
+			fp = strings.ToLower(strings.TrimSpace(fp))
+			if fp == "" {
+				continue
+			}
+			p.trustedOrigins[origin] = append(p.trustedOrigins[origin], fp)
+		}
+		return nil
+	}
+}
+
+// BlocklistOrigin returns the name this node stamps on tombstones it issues.
+func (p *Policy) BlocklistOrigin() string { return p.blocklistOrigin }
+
+// TrustedBlocklistKeys returns the fingerprints allowed to sign for a blocklist
+// origin. An empty result means tombstones from that origin are not honoured.
+func (p *Policy) TrustedBlocklistKeys(origin string) []string {
+	return p.trustedOrigins[strings.ToLower(strings.TrimSpace(origin))]
 }
 
 func (p Policy) IsPersistable(uid *UserID) bool {

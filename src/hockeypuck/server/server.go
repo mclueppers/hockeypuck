@@ -96,6 +96,12 @@ func PolicyOptions(settings *Settings) []openpgp.PolicyOption {
 	if len(settings.OpenPGP.EnumerableDomains) > 0 {
 		opts = append(opts, openpgp.EnumerableDomains(settings.OpenPGP.EnumerableDomains))
 	}
+	if origin := settings.OpenPGP.Blocklist.Origin; origin != "" {
+		opts = append(opts, openpgp.BlocklistOrigin(origin))
+	}
+	for origin, fingerprints := range settings.OpenPGP.Blocklist.TrustedOrigins {
+		opts = append(opts, openpgp.TrustBlocklistOrigin(origin, fingerprints))
+	}
 	return opts
 }
 
