@@ -18,9 +18,14 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	gocrypto "github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/pkg/errors"
@@ -208,4 +213,63 @@ func plural(n int, singular, pluralForm string) string {
 		return fmt.Sprintf("%d %s", n, singular)
 	}
 	return fmt.Sprintf("%d %s", n, pluralForm)
+}
+
+// submitTombstones posts tombstones to a running server's HKP submission
+// endpoint. A tombstone is an ordinary certificate on the wire, so this needs no
+// new endpoint, and it avoids taking the prefix tree lock: the running server
+// owns that, and updates it as it stores each block.
+func submitTombstones(baseURL string, settings *server.Settings, tombstones []*openpgp.PrimaryKey) error {
+	endpoint, err := submissionURL(baseURL)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	var submitted int
+	for _, tombstone := range tombstones {
+		var armored bytes.Buffer
+		if err := openpgp.WriteArmoredPackets(&armored, []*openpgp.PrimaryKey{tombstone},
+			false, server.KeyWriterOptions(settings)...); err != nil {
+			return err
+		}
+		resp, err := client.PostForm(endpoint, url.Values{"keytext": {armored.String()}})
+		if err != nil {
+			return usagef("cannot reach %s: %v", endpoint, err)
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			log.Errorf("0x%s refused by %s: HTTP %d %s",
+				tombstone.Fingerprint, endpoint, resp.StatusCode, strings.TrimSpace(string(body)))
+			continue
+		}
+		submitted++
+		log.Debugf("submitted 0x%s to %s", tombstone.Fingerprint, endpoint)
+	}
+	fmt.Fprintf(os.Stderr, "submitted %s to %s\n", plural(submitted, "block", "blocks"), endpoint)
+	if submitted < len(tombstones) {
+		return findingf("%d of %d blocks were refused by the server",
+			len(tombstones)-submitted, len(tombstones))
+	}
+	return nil
+}
+
+// submissionURL turns what an operator is likely to type into the submission
+// endpoint, accepting a bare host, a base URL, or the full path.
+func submissionURL(raw string) (string, error) {
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", usagef("cannot parse server address %q: %v", raw, err)
+	}
+	if parsed.Host == "" {
+		return "", usagef("no host in server address %q", raw)
+	}
+	if !strings.HasSuffix(parsed.Path, "/pks/add") {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/pks/add"
+	}
+	return parsed.String(), nil
 }

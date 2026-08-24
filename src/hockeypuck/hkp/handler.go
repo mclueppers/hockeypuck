@@ -931,7 +931,12 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 
 		change, err := h.storage.Upsert(key)
 		if err != nil {
-			httpError(w, http.StatusInternalServerError, errors.WithStack(err))
+			if storage.IsBlockRefused(err) {
+				// A judgement about what was submitted, not a fault here.
+				httpError(w, http.StatusUnprocessableEntity, errors.WithStack(err))
+			} else {
+				httpError(w, http.StatusInternalServerError, errors.WithStack(err))
+			}
 			return
 		}
 
@@ -1009,6 +1014,9 @@ func (h *Handler) Replace(w http.ResponseWriter, r *http.Request, _ httprouter.P
 		if err != nil {
 			if errors.Is(err, storage.ErrKeyNotFound) {
 				httpError(w, http.StatusNotFound, errors.WithStack(err))
+			} else if storage.IsBlockRefused(err) {
+				// A judgement about what was submitted, not a fault here.
+				httpError(w, http.StatusUnprocessableEntity, errors.WithStack(err))
 			} else {
 				httpError(w, http.StatusInternalServerError, errors.WithStack(err))
 			}

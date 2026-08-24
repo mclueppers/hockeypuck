@@ -29,6 +29,12 @@ import (
 )
 
 var ErrKeyNotFound = fmt.Errorf("key not found")
+
+// ErrBlockRefused reports that a blocklist tombstone was not admitted,
+// because its origin is not trusted or its signature does not verify. It is a
+// judgement about what was offered, not a failure of this server, so callers
+// should report it to whoever submitted it rather than as a fault.
+var ErrBlockRefused = fmt.Errorf("blocklist tombstone refused")
 var ErrDigestMismatch = fmt.Errorf("digest mismatch")
 var AutoPreen = "AutoPreen"
 
@@ -40,6 +46,11 @@ var IncludeTombstones = "IncludeTombstones"
 
 func IsNotFound(err error) bool {
 	return errors.Is(err, ErrKeyNotFound)
+}
+
+// IsBlockRefused reports whether a tombstone was turned away by blocklist policy.
+func IsBlockRefused(err error) bool {
+	return errors.Is(err, ErrBlockRefused)
 }
 
 const (

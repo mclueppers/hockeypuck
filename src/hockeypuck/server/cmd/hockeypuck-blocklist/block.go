@@ -35,6 +35,7 @@ var (
 	blockOrigin  string
 	blockDryRun  bool
 	blockOut     string
+	blockServer  string
 )
 
 var blockCommand = &command{
@@ -56,15 +57,17 @@ Blocking replaces key material rather than deleting it, so the fingerprint's row
 stays occupied and the key cannot simply be re-offered. Existing key material for
 the fingerprint is replaced.
 
-With -o, the tombstone is written to a file instead of being stored, for
-submission elsewhere - to a running server over HKP, for instance, which needs no
-downtime.`,
+Writing to the database directly needs the reconciliation prefix tree, which a
+running server holds, so it wants the server stopped. With -server the block is
+submitted over HKP instead and the running server stores it, which needs no
+downtime. With -o it is written to a file for submission elsewhere.`,
 	setup: func(fs *flag.FlagSet) {
 		fs.StringVar(&blockSignKey, "sign-key", "", "private key to sign the block with (required unless -o is used with an existing signature)")
 		fs.StringVar(&blockReason, "reason", "", "short reason code, published to peers (optional)")
 		fs.StringVar(&blockOrigin, "origin", "", "override the origin from the configuration")
 		fs.BoolVar(&blockDryRun, "dry-run", false, "report what would be blocked, change nothing")
 		fs.StringVar(&blockOut, "o", "", `write the tombstones to a file instead of storing them ("-" for stdout)`)
+		fs.StringVar(&blockServer, "server", "", "submit to a running server over HKP instead of writing to the database directly")
 	},
 	run: runBlock,
 }
@@ -103,15 +106,20 @@ func runBlock(settings *server.Settings, args []string) error {
 		fmt.Fprintf(os.Stderr, "%s\n", ts)
 	}
 
-	if blockOut != "" {
-		return writeTombstones(settings, blockOut, tombstones)
+	if blockOut != "" && blockServer != "" {
+		return usagef("-o and -server are alternatives; pick one")
 	}
 	if blockDryRun {
 		fmt.Fprintf(os.Stderr, "dry run: %s would be blocked, nothing was changed\n",
 			plural(len(tombstones), "key", "keys"))
 		return nil
 	}
-
+	if blockOut != "" {
+		return writeTombstones(settings, blockOut, tombstones)
+	}
+	if blockServer != "" {
+		return submitTombstones(blockServer, settings, tombstones)
+	}
 	s, err := openSession(settings, true)
 	if err != nil {
 		return err

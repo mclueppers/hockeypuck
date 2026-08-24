@@ -46,7 +46,7 @@ type command struct {
 	run         func(settings *server.Settings, args []string) error
 }
 
-var commands = []*command{blockCommand, unblockCommand, listCommand, showCommand}
+var commands = []*command{blockCommand, unblockCommand, migrateCommand, listCommand, showCommand}
 
 func lookupCommand(name string) *command {
 	for _, c := range commands {

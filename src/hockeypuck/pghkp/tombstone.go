@@ -42,12 +42,13 @@ func (st *storage) admitTombstone(key *openpgp.PrimaryKey) error {
 	}
 	ts, sigs, err := openpgp.TombstoneOf(key)
 	if err != nil {
-		return errors.Wrap(err, "malformed tombstone")
+		return errors.Wrap(hkpstorage.ErrBlockRefused, "malformed tombstone: "+err.Error())
 	}
 
 	fingerprints := st.policy.TrustedBlocklistKeys(ts.Origin)
 	if len(fingerprints) == 0 {
-		return errors.Errorf("refusing tombstone for 0x%s: no keys are trusted for blocklist origin %q",
+		return errors.Wrapf(hkpstorage.ErrBlockRefused,
+			"tombstone for 0x%s: no keys are trusted for blocklist origin %q",
 			ts.Fingerprint, ts.Origin)
 	}
 
@@ -65,13 +66,14 @@ func (st *storage) admitTombstone(key *openpgp.PrimaryKey) error {
 		}
 	}
 	if len(trusted) == 0 {
-		return errors.Errorf("refusing tombstone for 0x%s: none of the keys trusted for origin %q are in this keyserver",
+		return errors.Wrapf(hkpstorage.ErrBlockRefused,
+			"tombstone for 0x%s: none of the keys trusted for origin %q are in this keyserver",
 			ts.Fingerprint, ts.Origin)
 	}
 
 	signer, err := openpgp.VerifyTombstone(*ts, sigs, trusted)
 	if err != nil {
-		return errors.Wrapf(err, "refusing tombstone for 0x%s", ts.Fingerprint)
+		return errors.Wrapf(hkpstorage.ErrBlockRefused, "tombstone for 0x%s: %v", ts.Fingerprint, err)
 	}
 	log.Debugf("admitted tombstone for 0x%s from origin %q, signed by 0x%s",
 		ts.Fingerprint, ts.Origin, signer)

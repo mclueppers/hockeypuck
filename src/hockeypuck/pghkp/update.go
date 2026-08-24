@@ -149,6 +149,14 @@ func (st *storage) Upsert(pubkey *openpgp.PrimaryKey) (hkpstorage.KeyChange, err
 		return kc, nil
 	}
 
+	if openpgp.IsTombstone(pubkey) {
+		// A tombstone displaces key material rather than merging with it: the
+		// point of the block is that the key is gone. Without this, a block for
+		// a key this server already holds would be merged into it, which is
+		// neither meaningful nor what was asked for.
+		return st.Replace(pubkey)
+	}
+
 	// The key already exists; merge the incoming key into it. errTargetMissing
 	// is thrown if the stored copy changes underneath us (e.g. concurrent
 	// updates); back off a few times before giving up.
