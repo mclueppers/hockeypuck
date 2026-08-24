@@ -251,7 +251,12 @@ func (ocert *OpaqueCert) Parse() (*PrimaryKey, error) {
 			}
 
 		} else if opkt.Tag == 12 { //packet.PacketTypeTrust:
-			return nil, errors.Errorf("bare trust packets are not supported")
+			// A certificate led by a trust packet is a blocklist tombstone: it
+			// stands in for key material this server refuses to hold.
+			if len(ocert.Packets) != 1 {
+				return nil, errors.Errorf("tombstone cert must hold exactly one packet, got %d", len(ocert.Packets))
+			}
+			return parseTombstoneCert(opkt)
 		} else if opkt.Tag == 2 { //packet.PacketTypeSignature:
 			return nil, ErrBareRevocation
 		} // there is no else here, because OpaqueKeyReader will have silently dropped any other misplaced packets
@@ -372,6 +377,24 @@ PARSE:
 			current.setPosition(r.r)
 			currentFingerprint = fp
 			current.Packets = append(current.Packets, op)
+		case 12:
+			//packet.PacketTypeTrust
+			// An attached trust packet annotates the key material before it, but
+			// a tombstone annotates nothing and forms a certificate of its own.
+			// Telling them apart here keeps a tombstone in the middle of a
+			// keydump from being absorbed by whatever key happened to precede it.
+			if isTombstonePacket(op) {
+				if current != nil {
+					result = append(result, current)
+				}
+				current = &OpaqueCert{}
+				current.setPosition(r.r)
+				currentKeyLen = 0
+				currentFingerprint = ""
+				current.Packets = append(current.Packets, op)
+			} else if current != nil {
+				current.Packets = append(current.Packets, op)
+			}
 		case 2:
 			//packet.PacketTypeSignature
 			if current != nil {
