@@ -271,7 +271,7 @@ func (st *storage) FetchRecordsByMD5(md5s []string, options ...string) ([]*hkpst
 	// https://github.com/hockeypuck/hockeypuck/issues/170#issuecomment-1384003238 (note 1)
 	//
 	// TODO: we should be able to avoid the second request if we use JOIN instead of WHERE in fetchRecordsByQuery
-	rows, err := st.Query("SELECT md5 FROM (values $1) as hashquery(md5) WHERE NOT EXISTS (SELECT FROM keys WHERE md5 = hashquery.md5)", pq.Array(md5s))
+	rows, err := st.Query("SELECT md5 FROM UNNEST(CAST($1 as text[])) as hashquery(md5) WHERE NOT EXISTS (SELECT FROM keys WHERE md5 = hashquery.md5)", pq.Array(md5s))
 	if err == nil {
 		for rows.Next() {
 			var md5 string
