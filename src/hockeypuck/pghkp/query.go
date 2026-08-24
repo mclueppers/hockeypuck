@@ -266,6 +266,9 @@ func (st *storage) FetchRecordsByMD5(md5s []string, options ...string) ([]*hkpst
 		md5s[i] = strings.ToLower(md5)
 	}
 	records, err := st.fetchRecordsByQuery([]string{"WHERE md5 = any ($1)"}, "", []any{pq.Array(md5s)}, options...)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	// If we receive a hashquery for nonexistent digest(s), assume the ptree is stale and force an update.
 	// https://github.com/hockeypuck/hockeypuck/issues/170#issuecomment-1384003238 (note 1)
@@ -280,6 +283,8 @@ func (st *storage) FetchRecordsByMD5(md5s []string, options ...string) ([]*hkpst
 				st.Notify(hkpstorage.KeyRemovedJitter{ID: "??", Digest: md5})
 			}
 		}
+	} else {
+		log.Errorf("SQL error when checking for nonexistent digests: %s", err.Error())
 	}
 
 	return records, nil
