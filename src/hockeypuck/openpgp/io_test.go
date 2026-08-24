@@ -62,7 +62,7 @@ func (s *SamplePacketSuite) TestSksDigestWithNoisyTrust(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 	c.Assert(key.KeyID, gc.Equals, "cc5112bdce353cf4")
 	c.Assert(md5, gc.Equals, "1be5ab9fec9594d06ba6ec86ee27cfb2")
-	c.Assert(trustmd5, gc.Equals, "9f157609dde4107cc4f98d783b8f09e1")
+	c.Assert(trustmd5, gc.Equals, "83bffdab9c28acb4e616c42dddf5c03c")
 }
 
 func (s *SamplePacketSuite) TestSksDigestWithNoTrust(c *gc.C) {
