@@ -81,6 +81,9 @@ func TrustBlocklistOrigin(origin string, fingerprints []string) PolicyOption {
 		}
 		for _, fp := range fingerprints {
 			fp = strings.ToLower(strings.TrimSpace(fp))
+			// Accept the 0x form: it is what `hockeypuck-blocklist list` prints
+			// and what adminKeys tolerates, but lookups want bare hex.
+			fp = strings.TrimPrefix(fp, "0x")
 			if fp == "" {
 				continue
 			}

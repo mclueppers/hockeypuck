@@ -261,15 +261,14 @@ func (st *storage) FetchRecordsByKeyword(search string, options ...string) ([]*h
 //  1. The returned Records MAY contain nil PrimaryKeys; the caller MUST test for them.
 //  2. If options contains AutoPreen, any schema changes will be written back to the DB.
 //  3. Any digests that do not match a Record will trigger a KeyRemovedJitter notification.
-//  4. Blocklist tombstones are always returned. Digest lookups serve reconciliation
-//     and dumps, both of which need the whole dataset this node holds, unlike the
-//     key material queries above.
+//  4. Blocklist tombstones are returned only if options contains
+//     IncludeTombstones. This query also backs the HKP hget lookup, to which a
+//     blocked key must look absent.
 func (st *storage) FetchRecordsByMD5(md5s []string, options ...string) ([]*hkpstorage.Record, error) {
 	for i, md5 := range md5s {
 		md5s[i] = strings.ToLower(md5)
 	}
-	records, err := st.fetchRecordsByQuery([]string{"WHERE md5 = any ($1)"}, "",
-		[]any{pq.Array(md5s)}, append(options, hkpstorage.IncludeTombstones)...)
+	records, err := st.fetchRecordsByQuery([]string{"WHERE md5 = any ($1)"}, "", []any{pq.Array(md5s)}, options...)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

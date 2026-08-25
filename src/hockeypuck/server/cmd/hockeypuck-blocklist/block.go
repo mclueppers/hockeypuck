@@ -62,7 +62,7 @@ running server holds, so it wants the server stopped. With -server the block is
 submitted over HKP instead and the running server stores it, which needs no
 downtime. With -o it is written to a file for submission elsewhere.`,
 	setup: func(fs *flag.FlagSet) {
-		fs.StringVar(&blockSignKey, "sign-key", "", "private key to sign the block with (required unless -o is used with an existing signature)")
+		fs.StringVar(&blockSignKey, "sign-key", "", "private key to sign the block with (required)")
 		fs.StringVar(&blockReason, "reason", "", "short reason code, published to peers (optional)")
 		fs.StringVar(&blockOrigin, "origin", "", "override the origin from the configuration")
 		fs.BoolVar(&blockDryRun, "dry-run", false, "report what would be blocked, change nothing")

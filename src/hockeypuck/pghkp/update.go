@@ -261,12 +261,44 @@ func (st *storage) insertKey(key *openpgp.PrimaryKey) (needUpsert bool, retErr e
 
 var errTargetMissing = errors.New("errTargetMissing")
 
+// partitionTombstones splits key material from the blocks that displace it.
+func partitionTombstones(keys []*openpgp.PrimaryKey) (material, blocked []*openpgp.PrimaryKey) {
+	for _, key := range keys {
+		if openpgp.IsTombstone(key) {
+			blocked = append(blocked, key)
+			continue
+		}
+		material = append(material, key)
+	}
+	return material, blocked
+}
+
 func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 	var result hkpstorage.InsertError
 
 	// Filter here rather than below, so that the bulk path is covered as well
 	// as the one-at-a-time fallback.
 	keys = st.admitTombstones(keys, &result)
+
+	// Tombstones cannot go through bulk insertion. It filters out every
+	// fingerprint already present in keys, so a block for a key this server
+	// holds would be counted as a duplicate and silently dropped, leaving the
+	// key in place. Take them one at a time instead, where Upsert routes them to
+	// Replace and the displaced key's components and notifications are handled.
+	keys, blocked := partitionTombstones(keys)
+	for _, tombstone := range blocked {
+		kc, err := st.Upsert(tombstone)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			continue
+		}
+		switch kc.(type) {
+		case hkpstorage.KeyAdded:
+			n++
+		case hkpstorage.KeyReplaced:
+			u++
+		}
+	}
 
 	bulkOK, bulkSkip := false, false
 	if len(keys) >= minKeys2UseBulk {

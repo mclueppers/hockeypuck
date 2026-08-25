@@ -422,7 +422,9 @@ func (h *Handler) HashQuery(w http.ResponseWriter, r *http.Request, _ httprouter
 	var result []*storage.Record
 
 	responseLen := 0
-	records, err := h.storage.FetchRecordsByMD5(hq.Digests, storage.AutoPreen)
+	// Reconciliation needs the whole dataset this node holds, tombstones
+	// included, so a partner can recover the blocks we are advertising.
+	records, err := h.storage.FetchRecordsByMD5(hq.Digests, storage.AutoPreen, storage.IncludeTombstones)
 	if err != nil {
 		log.Errorf("error fetching keys from digests %v: %v", hq.Digests, err)
 		return
