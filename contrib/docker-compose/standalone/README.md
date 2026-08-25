@@ -102,6 +102,15 @@ docker-compose up -d
 This will leave behind stale intermediate images, which may be quite large.
 To clean them up, run `./clean-images.bash`.
 
+After upgrading, it is normally good practice to invoke the site builder scripts, in case there are breaking changes to the config files:
+
+```
+./mksite.bash
+./mkconfig.bash
+```
+
+These scripts are idempotent, so running them too often should not have any effect.
+
 ## Postgres
 
 Note that upgrading PostgreSQL can be done in-place, however it can take an hour or more to reindex the tables.
