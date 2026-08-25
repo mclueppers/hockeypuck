@@ -59,4 +59,4 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 )
 
-replace github.com/ProtonMail/go-crypto => github.com/pgpkeys-eu/go-crypto v1.4.2-0.20260715100812-5c270386de4c
+replace github.com/ProtonMail/go-crypto => github.com/pgpkeys-eu/go-crypto v1.4.2-0.20260816224830-d2a8cc303a65

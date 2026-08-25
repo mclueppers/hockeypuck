@@ -14,7 +14,7 @@ github.com/Masterminds/semver/v3
 # github.com/Masterminds/sprig/v3 v3.3.0
 ## explicit; go 1.21
 github.com/Masterminds/sprig/v3
-# github.com/ProtonMail/go-crypto v1.3.0 => github.com/pgpkeys-eu/go-crypto v1.4.2-0.20260715100812-5c270386de4c
+# github.com/ProtonMail/go-crypto v1.3.0 => github.com/pgpkeys-eu/go-crypto v1.4.2-0.20260816224830-d2a8cc303a65
 ## explicit; go 1.23.0
 github.com/ProtonMail/go-crypto/bitcurves
 github.com/ProtonMail/go-crypto/brainpool
@@ -255,4 +255,4 @@ gopkg.in/check.v1
 # gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637
 ## explicit
 gopkg.in/tomb.v2
-# github.com/ProtonMail/go-crypto => github.com/pgpkeys-eu/go-crypto v1.4.2-0.20260715100812-5c270386de4c
+# github.com/ProtonMail/go-crypto => github.com/pgpkeys-eu/go-crypto v1.4.2-0.20260816224830-d2a8cc303a65
