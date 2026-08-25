@@ -260,11 +260,28 @@ type KeyReplaced struct {
 	NewDigest string
 }
 
+// InsertDigests and RemoveDigests are empty when a replacement did not change
+// the SKS digest.
+//
+// That happens whenever the stored certificate changed but the part of it the
+// digest covers did not: a quiet trust packet, or one blocklist tombstone
+// displacing another for the same fingerprint, which share a digest by design
+// so that peers converge on blocks rather than churning over them. Emitting the
+// pair would queue an insert and a remove of the same element, and the
+// reconciliation peer applies every queued insert before every queued remove,
+// so the removal would win - leaving the prefix tree no longer advertising a
+// key the database still holds.
 func (kr KeyReplaced) InsertDigests() []string {
+	if kr.NewDigest == kr.OldDigest {
+		return nil
+	}
 	return []string{kr.NewDigest}
 }
 
 func (kr KeyReplaced) RemoveDigests() []string {
+	if kr.NewDigest == kr.OldDigest {
+		return nil
+	}
 	return []string{kr.OldDigest}
 }
 

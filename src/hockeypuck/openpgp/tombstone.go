@@ -20,6 +20,7 @@ package openpgp
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ import (
 	gocrypto "github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // A tombstone is a certificate consisting of a single trust packet, stored
@@ -296,21 +298,37 @@ func parseTombstoneCert(op *packet.OpaquePacket) (*PrimaryKey, error) {
 	return pubkey, nil
 }
 
-// publicKeyPacket returns the parsed public key packet for a component key.
-func publicKeyPacket(pub *PublicKey) (*packet.PublicKey, error) {
-	op, err := pub.opaquePacket()
-	if err != nil {
-		return nil, errors.WithStack(err)
+// ErrTombstoneUnverifiable reports that this server could not check a tombstone
+// rather than that it found it bad. A caller sweeping stored blocks must tell
+// the two apart: a block it cannot judge has to be kept, or a trusted key that
+// is merely unreadable here would silently withdraw the blocks it signed.
+var ErrTombstoneUnverifiable = errors.New("tombstone could not be checked")
+
+// trustedKeyring re-reads the keys trusted for an origin as go-crypto entities,
+// so that a tombstone signature can be checked by the high-level detached
+// signature path rather than by raw signature maths.
+//
+// This is the same round trip the admin key check makes in hkp.Handler:
+// hockeypuck holds a key as its own packet tree, and go-crypto wants an Entity.
+func trustedKeyring(trusted []*PrimaryKey) gocrypto.EntityList {
+	var keyring gocrypto.EntityList
+	for _, key := range trusted {
+		if key == nil {
+			continue
+		}
+		var buf bytes.Buffer
+		if err := WritePackets(&buf, key); err != nil {
+			log.Warnf("cannot serialize trusted blocklist key 0x%s: %v", key.Fingerprint, err)
+			continue
+		}
+		entity, err := gocrypto.ReadEntity(packet.NewReader(&buf))
+		if err != nil {
+			log.Warnf("cannot read trusted blocklist key 0x%s: %v", key.Fingerprint, err)
+			continue
+		}
+		keyring = append(keyring, entity)
 	}
-	parsed, err := op.Parse()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	pk, ok := parsed.(*packet.PublicKey)
-	if !ok {
-		return nil, errors.WithStack(ErrInvalidPacketType)
-	}
-	return pk, nil
+	return keyring
 }
 
 // VerifyTombstone reports the fingerprint of the trusted key that vouches for a
@@ -332,55 +350,48 @@ func VerifyTombstone(ts Tombstone, sigs []*Signature, trusted []*PrimaryKey) (st
 		return "", errors.Errorf("tombstone for 0x%s carries no signature", ts.Fingerprint)
 	}
 	if len(trusted) == 0 {
-		return "", errors.Errorf("no keys are trusted for origin %q", ts.Origin)
+		return "", errors.Wrapf(ErrTombstoneUnverifiable, "no keys are trusted for origin %q", ts.Origin)
+	}
+	keyring := trustedKeyring(trusted)
+	if len(keyring) == 0 {
+		// The keys are here but none of them could be read, so this server
+		// cannot judge the block. "Not signed by a trusted key" would be a
+		// different claim, and acting on it would delete blocks over a parsing
+		// failure in the key that vouches for them.
+		return "", errors.Wrapf(ErrTombstoneUnverifiable,
+			"none of the keys trusted for origin %q could be read", ts.Origin)
 	}
 	message := ts.SigningMessage()
 
 	var lastErr error
 	for _, sig := range sigs {
-		s, err := sig.signaturePacket()
+		// The signing message is a bare byte string, so only a binary document
+		// signature can be over it. Accepting other types would let a signature
+		// made for some other purpose be replayed as a block; a text signature
+		// in particular attests to a line-ending-canonicalised form of its
+		// input rather than to these bytes.
+		if sig.SigType != packet.SigTypeBinary {
+			lastErr = errors.Errorf("tombstone signature has type %d, want a binary document signature", sig.SigType)
+			continue
+		}
+		// The high-level path rather than a bare VerifySignature: as well as the
+		// signature maths it enforces that the issuing key is allowed to sign,
+		// and that neither it, its primary, its primary identity, nor the
+		// signature itself is revoked or expired. Checking the maths alone would
+		// let a revoked, expired or encryption-only subkey of a trusted primary
+		// authorise new blocks.
+		//
+		// A creation time in the future is deliberately not rejected. It buys a
+		// forger nothing - revocation and expiry are judged against now, not
+		// against the signature's own clock - while rejecting it would refuse
+		// legitimate blocks over ordinary clock skew between operators.
+		signer, err := gocrypto.CheckDetachedSignature(keyring,
+			bytes.NewReader(message), bytes.NewReader(sig.Data), nil)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		// The signing message is a bare byte string, so only a binary document
-		// signature can be over it. Accepting other types would let a signature
-		// made for some other purpose be replayed as a block.
-		if s.SigType != packet.SigTypeBinary {
-			lastErr = errors.Errorf("tombstone signature has type %d, want a binary document signature", s.SigType)
-			continue
-		}
-		if !s.Hash.Available() {
-			lastErr = errors.Errorf("tombstone signature uses unavailable hash %v", s.Hash)
-			continue
-		}
-		for _, key := range trusted {
-			// A signing subkey is the usual arrangement, so try those too.
-			candidates := []*PublicKey{&key.PublicKey}
-			for i := range key.SubKeys {
-				candidates = append(candidates, &key.SubKeys[i].PublicKey)
-			}
-			for _, candidate := range candidates {
-				pub, err := publicKeyPacket(candidate)
-				if err != nil {
-					lastErr = err
-					continue
-				}
-				if !pub.CanSign() {
-					continue
-				}
-				h := s.Hash.New()
-				if _, err := h.Write(message); err != nil {
-					lastErr = err
-					continue
-				}
-				if err := pub.VerifySignature(h, s); err != nil {
-					lastErr = err
-					continue
-				}
-				return key.Fingerprint, nil
-			}
-		}
+		return hex.EncodeToString(signer.PrimaryKey.Fingerprint[:]), nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no trusted key matched")

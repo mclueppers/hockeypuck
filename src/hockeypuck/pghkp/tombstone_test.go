@@ -641,3 +641,73 @@ func (s *TS) TestReplaceWaitsForAConcurrentBlock(c *gc.C) {
 	c.Check(isTombstone, gc.Equals, true,
 		gc.Commentf("the block must still be in place after the replacement was refused"))
 }
+
+// TestReblockDoesNotDropTheDigest: two blocks for one fingerprint share an SKS
+// digest by design - that is what makes reconciliation converge on them - so
+// replacing one with the other changes the stored certificate in a way the
+// digest does not see. Emitting an insert and a remove of the same element would
+// leave the prefix tree no longer advertising a block the database holds,
+// because the peer applies every queued insert before every queued remove.
+func (s *TS) TestReblockDoesNotDropTheDigest(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+
+	first := s.block(c, victim.Fingerprint, true)
+	_, err := s.storage.Upsert(first)
+	c.Assert(err, gc.IsNil)
+
+	// The same fingerprint blocked again, differing only in its annotations.
+	ts := openpgp.Tombstone{Fingerprint: victim.Fingerprint, Origin: tsOrigin, Reason: "gdpr"}
+	sig, err := openpgp.SignTombstone(ts, s.signer)
+	c.Assert(err, gc.IsNil)
+	second, err := openpgp.NewTombstone(ts, sig)
+	c.Assert(err, gc.IsNil)
+	c.Assert(second.MD5, gc.Equals, first.MD5,
+		gc.Commentf("blocks for one fingerprint are meant to share a digest"))
+
+	kc, err := s.storage.Upsert(second)
+	c.Assert(err, gc.IsNil)
+	replaced, ok := kc.(hkpstorage.KeyReplaced)
+	c.Assert(ok, gc.Equals, true, gc.Commentf("expected a replacement, got %#v", kc))
+	c.Check(replaced.InsertDigests(), gc.HasLen, 0)
+	c.Check(replaced.RemoveDigests(), gc.HasLen, 0,
+		gc.Commentf("a same-digest replacement must not withdraw the element from the prefix tree"))
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true)
+	c.Check(isTombstone, gc.Equals, true)
+}
+
+// TestSweepLeavesABlockThatChangedUnderIt: the sweep judges a block, then
+// deletes it - and a valid block for the same fingerprint can arrive in between.
+// Deleting by fingerprint alone would remove the good one, and comparing digests
+// would not notice, because the two share one.
+func (s *TS) TestSweepLeavesABlockThatChangedUnderIt(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+
+	// A bad block, stored the way a keydump would store it.
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{
+		s.blockFrom(c, victim.Fingerprint, tsOrigin, nil)})
+	c.Assert(err, gc.IsNil)
+
+	// Judged the way the sweep judges it.
+	records, err := s.storage.blocksAfter("", 10)
+	c.Assert(err, gc.IsNil)
+	c.Assert(records, gc.HasLen, 1)
+	verdict, _ := s.storage.judgeTombstone(records[0].PrimaryKey)
+	c.Assert(verdict, gc.Equals, blockInvalid)
+
+	// A good block for the same fingerprint lands before the sweep acts.
+	_, err = s.storage.Upsert(s.block(c, victim.Fingerprint, true))
+	c.Assert(err, gc.IsNil)
+
+	gone, err := s.storage.removeInvalidBlock(victim.Fingerprint)
+	c.Assert(err, gc.IsNil)
+	c.Check(gone, gc.Equals, false,
+		gc.Commentf("the sweep must not delete a block that became valid under it"))
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true)
+	c.Check(isTombstone, gc.Equals, true)
+}

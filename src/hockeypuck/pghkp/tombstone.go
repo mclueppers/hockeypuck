@@ -87,6 +87,11 @@ func (st *storage) judgeTombstone(key *openpgp.PrimaryKey) (blockVerdict, error)
 		// narrow this, but a block is normally signed by a signing subkey, and a
 		// subkey's issuer key ID cannot be tied back to a primary fingerprint
 		// without holding the key that is missing.
+		if errors.Is(err, openpgp.ErrTombstoneUnverifiable) {
+			// The keys are here but none of them could be read as a key, so
+			// this server cannot judge the block at all.
+			return blockUnverifiable, err
+		}
 		if len(absent) > 0 {
 			return blockUnverifiable, errors.Wrapf(err,
 				"cannot judge tombstone for 0x%s: %s trusted for origin %q not in this keyserver (0x%s)",
@@ -245,9 +250,15 @@ func (st *storage) verifyBlocks() {
 				log.Warnf("cannot verify block on 0x%s, leaving it in place: %v",
 					record.Fingerprint, err)
 			case blockInvalid:
-				log.Errorf("removing unverifiable block on 0x%s: %v", record.Fingerprint, err)
-				if _, delErr := st.Delete(record.Fingerprint); delErr != nil {
+				log.Errorf("removing bad block on 0x%s: %v", record.Fingerprint, err)
+				gone, delErr := st.removeInvalidBlock(record.Fingerprint)
+				if delErr != nil {
 					log.Errorf("could not remove bad block on 0x%s: %v", record.Fingerprint, delErr)
+					continue
+				}
+				if !gone {
+					log.Infof("block on 0x%s changed while the sweep was judging it, leaving it alone",
+						record.Fingerprint)
 					continue
 				}
 				removed++
@@ -260,6 +271,66 @@ func (st *storage) verifyBlocks() {
 	}
 	log.Infof("checked %d blocklist tombstones: %d removed as invalid, %d could not be verified",
 		checked, removed, unverifiable)
+}
+
+// removeInvalidBlock deletes a block, but only if it is still the same bad block
+// the sweep judged.
+//
+// The sweep reads a bunch of blocks, judges them one at a time, and deletes what
+// it can prove is bad - so between the judgement and the delete, a valid block
+// for that fingerprint can arrive by reconciliation and take the bad one's
+// place. Deleting by fingerprint alone would then remove the good one. Nor is
+// comparing digests enough to notice the swap: two tombstones for the same
+// fingerprint share an SKS digest by design, which is the whole reason
+// reconciliation converges on them.
+//
+// So the block is re-read and re-judged with the fingerprint locked. No writer
+// for it can commit while that lock is held, which is what makes the block read
+// here the block deleted below.
+func (st *storage) removeInvalidBlock(fingerprint string) (removed bool, retErr error) {
+	tx, err := st.Begin()
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	defer func() {
+		if retErr != nil {
+			tx.Rollback()
+		} else {
+			retErr = tx.Commit()
+		}
+	}()
+	if err := lockFingerprintTx(tx, fingerprint); err != nil {
+		return false, err
+	}
+
+	records, err := st.FetchRecordsByFp([]string{fingerprint}, hkpstorage.IncludeTombstones)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	var current *hkpstorage.Record
+	for _, record := range records {
+		if record.Fingerprint == fingerprint {
+			current = record
+			break
+		}
+	}
+	if current == nil || !openpgp.IsTombstone(current.PrimaryKey) {
+		// Withdrawn, or displaced by key material, since the sweep looked.
+		return false, nil
+	}
+	if verdict, _ := st.judgeTombstone(current.PrimaryKey); verdict != blockInvalid {
+		return false, nil
+	}
+
+	md5, err := st.deleteTx(tx, fingerprint)
+	if err != nil {
+		if errors.Is(err, hkpstorage.ErrKeyNotFound) {
+			return false, nil
+		}
+		return false, errors.WithStack(err)
+	}
+	st.Notify(hkpstorage.KeyRemoved{ID: fingerprint, Digest: md5})
+	return true, nil
 }
 
 // blocksAfter returns a bounded bunch of stored tombstones ordered by reversed

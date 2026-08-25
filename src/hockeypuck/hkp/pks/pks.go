@@ -223,41 +223,49 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 	// The query has no ORDER BY, so sort before advancing the bookmark past
 	// anything: taking records as they arrive could move LastSync beyond a key
 	// that has not been sent yet, and that key would then never be sent.
-	sort.Slice(records, func(i, j int) bool { return records[i].MTime.Before(records[j].MTime) })
-	for _, record := range records {
-		// Take care, because records can contain nils
-		if record.PrimaryKey == nil {
-			continue
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].MTime.Equal(records[j].MTime) {
+			// A tie-break, so that a batch retried after a failure is processed
+			// in the same order it was the first time.
+			return records[i].Fingerprint < records[j].Fingerprint
 		}
-		if openpgp.IsTombstone(record.PrimaryKey) {
-			// Nothing to send, but the bookmark must still move past it, and it
-			// must be persisted: a batch of nothing but blocks would otherwise
-			// leave LastSync where it was and be re-read on every cycle.
+		return records[i].MTime.Before(records[j].MTime)
+	})
+	for i, record := range records {
+		sent := false
+		// Take care, because records can contain nils. A block is skipped too:
+		// PKS carries key material, and a blocklist tombstone is not that.
+		if record.PrimaryKey != nil && !openpgp.IsTombstone(record.PrimaryKey) {
+			log.Debugf("sending key %q to PKS %s", record.Fingerprint, status.Addr)
+			err = sender.SendKey(status.Addr, record.PrimaryKey)
+			status.LastError = err
+			if err != nil {
+				log.Errorf("error sending key to PKS %s: %v", status.Addr, err)
+				storageErr := sender.storage.PKSUpdate(status)
+				if storageErr != nil {
+					return errors.WithStack(storageErr)
+				}
+				return errors.WithStack(err)
+			}
+			sent = true
+		}
+		// The bookmark moves only at a change of timestamp, because the next
+		// query asks for mtime > LastSync. Advancing it within a group of
+		// records that share one - which a keydump load gives every row it
+		// writes - would exclude the rest of that group from the retry if a
+		// later one failed. The cost is re-sending the earlier keys of a group
+		// after a failure, which PKS tolerates; the alternative silently drops
+		// them.
+		if i+1 == len(records) || records[i+1].MTime.After(record.MTime) {
 			status.LastSync = record.MTime
 			if err := sender.storage.PKSUpdate(status); err != nil {
 				return errors.WithStack(err)
 			}
-			continue
 		}
-		log.Debugf("sending key %q to PKS %s", record.Fingerprint, status.Addr)
-		err = sender.SendKey(status.Addr, record.PrimaryKey)
-		status.LastError = err
-		if err != nil {
-			log.Errorf("error sending key to PKS %s: %v", status.Addr, err)
-			storageErr := sender.storage.PKSUpdate(status)
-			if storageErr != nil {
-				return errors.WithStack(storageErr)
-			}
-			return errors.WithStack(err)
+		if sent {
+			// Rate limit ourselves to prevent being blocked
+			time.Sleep(time.Second * repeatDelay)
 		}
-		// Send successful, update the timestamp accordingly
-		status.LastSync = record.MTime
-		err = sender.storage.PKSUpdate(status)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		// Rate limit ourselves to prevent being blocked
-		time.Sleep(time.Second * repeatDelay)
 	}
 	return nil
 }
