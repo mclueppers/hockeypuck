@@ -20,6 +20,8 @@ package pghkp
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -50,30 +52,82 @@ func (st *storage) judgeTombstone(key *openpgp.PrimaryKey) (blockVerdict, error)
 	if err != nil {
 		return blockInvalid, errors.Wrap(err, "malformed tombstone")
 	}
+	// An unsigned block is a defect in the block itself, not something this
+	// server's trust configuration could excuse, so it is judged before trust is
+	// consulted at all. Judging it afterwards would leave an unsigned block in
+	// place for as long as its origin happened to be unconfigured, which is the
+	// case on every server that has not opted into that origin.
+	if len(sigs) == 0 {
+		return blockInvalid, errors.Errorf(
+			"tombstone for 0x%s claiming origin %q carries no signature", ts.Fingerprint, ts.Origin)
+	}
 	fingerprints := st.policy.TrustedBlocklistKeys(ts.Origin)
 	if len(fingerprints) == 0 {
 		return blockUnverifiable, errors.Errorf(
 			"no keys are trusted for blocklist origin %q", ts.Origin)
 	}
-	records, err := st.FetchRecordsByFp(fingerprints)
+	trusted, absent, err := st.trustedBlocklistKeys(fingerprints)
 	if err != nil {
 		return blockUnverifiable, errors.Wrapf(err,
 			"cannot load trusted keys for blocklist origin %q", ts.Origin)
 	}
-	var trusted []*openpgp.PrimaryKey
-	for _, record := range records {
-		if record.PrimaryKey != nil {
-			trusted = append(trusted, record.PrimaryKey)
-		}
-	}
 	if len(trusted) == 0 {
 		return blockUnverifiable, errors.Errorf(
-			"none of the keys trusted for origin %q are in this keyserver", ts.Origin)
+			"none of the keys trusted for origin %q are in this keyserver (0x%s)",
+			ts.Origin, strings.Join(absent, ", 0x"))
 	}
 	if _, err := openpgp.VerifyTombstone(*ts, sigs, trusted); err != nil {
+		// A signature that fails to verify only proves forgery if every key
+		// trusted for the origin was there to check it against. A trusted key
+		// that is absent - not loaded yet, or rotated into the configuration
+		// ahead of its key material - would otherwise make its own blocks look
+		// forged, and the sweep would delete them.
+		//
+		// Matching the signature's issuer against the absent fingerprints would
+		// narrow this, but a block is normally signed by a signing subkey, and a
+		// subkey's issuer key ID cannot be tied back to a primary fingerprint
+		// without holding the key that is missing.
+		if len(absent) > 0 {
+			return blockUnverifiable, errors.Wrapf(err,
+				"cannot judge tombstone for 0x%s: %s trusted for origin %q not in this keyserver (0x%s)",
+				ts.Fingerprint, plural(len(absent), "key", "keys"), ts.Origin,
+				strings.Join(absent, ", 0x"))
+		}
 		return blockInvalid, err
 	}
 	return blockValid, nil
+}
+
+// trustedBlocklistKeys splits the fingerprints trusted for an origin into the
+// keys this server holds and the fingerprints it does not, so that a caller can
+// tell "this signature is bad" from "the key that would vouch for it is not
+// here yet".
+func (st *storage) trustedBlocklistKeys(fingerprints []string) (trusted []*openpgp.PrimaryKey, absent []string, _ error) {
+	records, err := st.FetchRecordsByFp(fingerprints)
+	if err != nil {
+		return nil, nil, errors.WithStack(err)
+	}
+	present := make(map[string]bool, len(records))
+	for _, record := range records {
+		if record.PrimaryKey == nil {
+			continue
+		}
+		trusted = append(trusted, record.PrimaryKey)
+		present[record.Fingerprint] = true
+	}
+	for _, fingerprint := range fingerprints {
+		if !present[fingerprint] {
+			absent = append(absent, fingerprint)
+		}
+	}
+	return trusted, absent, nil
+}
+
+func plural(n int, singular, pluralForm string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+	return fmt.Sprintf("%d %s", n, pluralForm)
 }
 
 // admitTombstone decides whether an incoming blocklist tombstone may be stored.

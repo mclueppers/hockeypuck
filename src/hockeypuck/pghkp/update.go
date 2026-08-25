@@ -179,7 +179,35 @@ func (st *storage) Upsert(pubkey *openpgp.PrimaryKey) (hkpstorage.KeyChange, err
 	return kc, nil
 }
 
+// lockFingerprintTx serializes the writers of one fingerprint for the rest of
+// the transaction.
+//
+// The row lock blockedInTx takes only covers a row that exists, so it cannot
+// stop a block being committed for a fingerprint that is currently empty - and
+// that is exactly the case a replacement has to get right, because the fresh
+// block would then be deleted by the replacement that had already decided the
+// fingerprint was free. An advisory lock is on a name rather than on a row, so a
+// writer that finds nothing stored still excludes the writer that is about to
+// store something.
+//
+// Bulk insertion does not take this lock, and does not need to: it runs only
+// from hockeypuck-load, which holds the reconciliation prefix tree and therefore
+// runs with the server stopped.
+func lockFingerprintTx(tx *sql.Tx, fingerprint string) error {
+	// md5 rather than hashtext: hashtext is an internal function whose value is
+	// not guaranteed across versions. Nothing here is a secret being hashed,
+	// only a name being folded into the bigint advisory locks are keyed on, and
+	// a collision costs two unrelated fingerprints a shared lock rather than a
+	// wrong answer.
+	_, err := tx.Exec("SELECT pg_advisory_xact_lock(('x' || substr(md5($1), 1, 16))::BIT(64)::BIGINT)",
+		fingerprint)
+	return errors.WithStack(err)
+}
+
 func (st *storage) insertKeyTx(tx *sql.Tx, key *openpgp.PrimaryKey) (needUpsert bool, retErr error) {
+	if err := lockFingerprintTx(tx, key.Fingerprint); err != nil {
+		return false, err
+	}
 	stmt, err := tx.Prepare("INSERT INTO keys (rfingerprint, ctime, mtime, idxtime, md5, doc, keywords, vfingerprint) " +
 		"SELECT $1::TEXT, $2::TIMESTAMP, $3::TIMESTAMP, $4::TIMESTAMP, $5::TEXT, $6::JSONB, $7::TSVECTOR, $8::TEXT " +
 		"WHERE NOT EXISTS (SELECT 1 FROM keys WHERE rfingerprint = $1)")
@@ -400,14 +428,22 @@ func (st *storage) replaceAdmitted(key *openpgp.PrimaryKey) (_ hkpstorage.KeyCha
 			retErr = tx.Commit()
 		}
 	}()
+	// Held from before the block check below until this transaction ends, so
+	// that the decision it makes still holds when the delete and insert act on
+	// it. insertKeyTx takes the same lock, so a block arriving by any route
+	// either lands before this check sees it or waits until after the commit.
+	if err := lockFingerprintTx(tx, key.Fingerprint); err != nil {
+		return nil, err
+	}
+
 	if !openpgp.IsTombstone(key) {
 		// Replace deletes whatever is stored before inserting, so without this
 		// ordinary key material would quietly remove a block and take its place.
 		// Only an explicit unblock may withdraw one.
 		//
-		// The check runs inside the transaction, and locks the row, so that a
-		// block committed concurrently cannot slip in between deciding and
-		// deleting.
+		// The check runs inside the transaction and takes a row lock, but that
+		// covers only a block that is already stored; the lock taken above is
+		// what covers one still being written.
 		blockedMD5, err := blockedInTx(tx, key.Fingerprint)
 		if err != nil {
 			return nil, errors.WithStack(err)
@@ -425,9 +461,17 @@ func (st *storage) replaceAdmitted(key *openpgp.PrimaryKey) (_ hkpstorage.KeyCha
 	if err != nil && !errors.Is(err, hkpstorage.ErrKeyNotFound) {
 		return nil, errors.WithStack(err)
 	}
-	_, err = st.insertKeyTx(tx, key)
+	needUpsert, err := st.insertKeyTx(tx, key)
 	if err != nil {
 		return nil, errors.WithStack(err)
+	}
+	if needUpsert {
+		// The fingerprint was taken between the delete above and this insert, so
+		// nothing was stored. lockFingerprintTx should make that unreachable;
+		// report it rather than fall through, because the KeyAdded below would
+		// otherwise put this key's digest in the reconciliation tree while the
+		// database holds something else under its fingerprint.
+		return nil, errors.Errorf("key fp(%v) was taken while it was being replaced", key.Fingerprint)
 	}
 
 	var kc hkpstorage.KeyChange

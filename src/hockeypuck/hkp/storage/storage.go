@@ -113,6 +113,7 @@ type Storage interface {
 	Deleter
 	Notifier
 	Reindexer
+	BlockVerifier
 	Reloader
 	pksstorage.Storage
 }
@@ -377,6 +378,19 @@ func Duplicates(err error) []*openpgp.PrimaryKey {
 type Reindexer interface {
 	// Reindex is a goroutine that reindexes the keydb in-place, oldest-modified items first.
 	StartReindex(reindexStartupDelaySecs, reindexLoadDelaySecs, reindexIntervalSecs int)
+}
+
+type BlockVerifier interface {
+	// StartVerifyBlocks is a goroutine that re-checks the blocklist tombstones
+	// the server holds and removes the ones it can prove are bad. Loading a
+	// keydump stores blocks without checking them, because the key that vouches
+	// for a block is usually in a different file; this is where that debt is
+	// settled.
+	//
+	// It is separate from StartReindex because reindexing is optional and this
+	// is not: an operator who turns reindexing off has not asked to keep
+	// unverified blocks.
+	StartVerifyBlocks(startupDelaySecs, intervalSecs int)
 }
 
 type Reloader interface {

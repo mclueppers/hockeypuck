@@ -20,6 +20,7 @@ package pghkp
 import (
 	"bytes"
 	"database/sql"
+	"time"
 
 	gocrypto "github.com/ProtonMail/go-crypto/openpgp"
 	gc "gopkg.in/check.v1"
@@ -113,6 +114,50 @@ func (s *TS) block(c *gc.C, fingerprint string, signed bool) *openpgp.PrimaryKey
 	tombstone, err := openpgp.NewTombstone(ts, sig)
 	c.Assert(err, gc.IsNil)
 	return tombstone
+}
+
+// blockFrom is block for a tombstone that claims some other origin, or that was
+// signed by some other key than the one this server trusts.
+func (s *TS) blockFrom(c *gc.C, fingerprint, origin string, signer *gocrypto.Entity) *openpgp.PrimaryKey {
+	ts := openpgp.Tombstone{Fingerprint: fingerprint, Origin: origin, Reason: "abuse"}
+	if signer == nil {
+		tombstone, err := openpgp.NewTombstone(ts)
+		c.Assert(err, gc.IsNil)
+		return tombstone
+	}
+	sig, err := openpgp.SignTombstone(ts, signer)
+	c.Assert(err, gc.IsNil)
+	tombstone, err := openpgp.NewTombstone(ts, sig)
+	c.Assert(err, gc.IsNil)
+	return tombstone
+}
+
+// newSigner mints a key and stores its public half, returning both halves. Use
+// it for a second trusted key, or for one this server should refuse.
+func (s *TS) newSigner(c *gc.C, name, email string, store bool) (*gocrypto.Entity, *openpgp.PrimaryKey) {
+	entity, err := gocrypto.NewEntity(name, "", email, nil)
+	c.Assert(err, gc.IsNil)
+	var pub bytes.Buffer
+	c.Assert(entity.Serialize(&pub), gc.IsNil)
+	keys, err := openpgp.NewKeyReader(bytes.NewReader(pub.Bytes())).Read()
+	c.Assert(err, gc.IsNil)
+	c.Assert(keys, gc.HasLen, 1)
+	if store {
+		_, err = s.storage.Upsert(keys[0])
+		c.Assert(err, gc.IsNil)
+	}
+	return entity, keys[0]
+}
+
+// trustKeys rebuilds the storage policy to trust exactly these fingerprints for
+// the test origin.
+func (s *TS) trustKeys(c *gc.C, fingerprints ...string) {
+	policy, err := openpgp.NewPolicy(
+		openpgp.BlocklistOrigin(tsOrigin),
+		openpgp.TrustBlocklistOrigin(tsOrigin, fingerprints),
+	)
+	c.Assert(err, gc.IsNil)
+	s.storage.policy = policy
 }
 
 func (s *TS) storedTag(c *gc.C, fingerprint string) (isTombstone, present bool) {
@@ -476,4 +521,123 @@ func (s *TS) TestVerifyBlocksPagesThroughAll(c *gc.C) {
 		_, present := s.storedTag(c, fp)
 		c.Check(present, gc.Equals, false, gc.Commentf("0x%s survived the sweep", fp))
 	}
+}
+
+// TestVerifyBlocksRemovesUnsignedBlocksFromAnyOrigin: an unsigned block is a
+// defect in the block itself, so the sweep removes it whether or not this server
+// has anything to say about the origin it claims. Judging trust first would keep
+// unsigned blocks forever on every server that has not opted into that origin -
+// which is every server, for an origin nobody configured.
+func (s *TS) TestVerifyBlocksRemovesUnsignedBlocksFromAnyOrigin(c *gc.C) {
+	victim := s.victim(c)
+	block := s.blockFrom(c, victim.Fingerprint, "nobody-configured.example.com", nil)
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{block})
+	c.Assert(err, gc.IsNil)
+	isTombstone, _ := s.storedTag(c, victim.Fingerprint)
+	c.Assert(isTombstone, gc.Equals, true)
+
+	s.storage.verifyBlocks()
+
+	_, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, false,
+		gc.Commentf("an unsigned block must not survive, whatever origin it claims"))
+}
+
+// TestVerifyBlocksKeepsOnesSignedByAnAbsentTrustedKey: with two keys trusted for
+// an origin and only one of them in the keyserver, a block signed by the other
+// fails to verify - but that failure proves nothing, because the key that would
+// vouch for it was never available to check against. Deleting on that would mean
+// a trusted key not yet loaded silently withdrew its own blocks, which is exactly
+// what a keydump restore looks like part way through.
+func (s *TS) TestVerifyBlocksKeepsOnesSignedByAnAbsentTrustedKey(c *gc.C) {
+	_, present := s.newSigner(c, "Present Origin", "present@example.com", true)
+	// Both are trusted; only the second one is here. The block is signed by
+	// s.signer, whose key is not stored.
+	s.trustKeys(c, s.origin.Fingerprint, present.Fingerprint)
+
+	victim := s.victim(c)
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, true)})
+	c.Assert(err, gc.IsNil)
+
+	s.storage.verifyBlocks()
+
+	isTombstone, stored := s.storedTag(c, victim.Fingerprint)
+	c.Check(stored, gc.Equals, true,
+		gc.Commentf("a block whose trusted signer is absent must be kept, not deleted"))
+	c.Check(isTombstone, gc.Equals, true)
+}
+
+// TestVerifyBlocksRemovesBlocksSignedByAnUntrustedKey: the converse of the
+// above. When every key trusted for the origin is in the keyserver, a signature
+// that verifies against none of them really is forged, and the sweep removes it.
+// Without this the previous test would be satisfied by a sweep that never
+// deletes anything.
+func (s *TS) TestVerifyBlocksRemovesBlocksSignedByAnUntrustedKey(c *gc.C) {
+	s.trustOrigin(c)
+	rogue, _ := s.newSigner(c, "Rogue", "rogue@example.com", false)
+
+	victim := s.victim(c)
+	block := s.blockFrom(c, victim.Fingerprint, tsOrigin, rogue)
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{block})
+	c.Assert(err, gc.IsNil)
+	isTombstone, _ := s.storedTag(c, victim.Fingerprint)
+	c.Assert(isTombstone, gc.Equals, true)
+
+	s.storage.verifyBlocks()
+
+	_, stored := s.storedTag(c, victim.Fingerprint)
+	c.Check(stored, gc.Equals, false,
+		gc.Commentf("a block signed by an untrusted key must not survive when the trusted key was there to check it"))
+}
+
+type replaceResult struct {
+	kc  hkpstorage.KeyChange
+	err error
+}
+
+// TestReplaceWaitsForAConcurrentBlock: the row lock blockedInTx takes covers
+// only a row that exists, so on its own it cannot stop a block being committed
+// for a fingerprint that is currently empty - and a replacement that had already
+// decided the fingerprint was free would then delete that fresh block, or report
+// a KeyAdded for material it never stored. Writers of one fingerprint therefore
+// take a lock on the name as well.
+func (s *TS) TestReplaceWaitsForAConcurrentBlock(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+
+	// A block that has taken the fingerprint but not yet committed.
+	tx, err := s.storage.Begin()
+	c.Assert(err, gc.IsNil)
+	_, err = s.storage.insertKeyTx(tx, s.block(c, victim.Fingerprint, true))
+	c.Assert(err, gc.IsNil)
+
+	done := make(chan replaceResult, 1)
+	go func() {
+		kc, err := s.storage.Replace(victim)
+		done <- replaceResult{kc, err}
+	}()
+
+	select {
+	case r := <-done:
+		tx.Rollback()
+		c.Fatalf("Replace decided the fingerprint was free while a block was being written: %v (%v)", r.kc, r.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	c.Assert(tx.Commit(), gc.IsNil)
+
+	select {
+	case r := <-done:
+		c.Assert(r.err, gc.IsNil)
+		_, refused := r.kc.(hkpstorage.KeyBlocked)
+		c.Check(refused, gc.Equals, true,
+			gc.Commentf("expected the replacement to be refused, got %#v", r.kc))
+	case <-time.After(30 * time.Second):
+		c.Fatal("Replace never finished after the block committed")
+	}
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true)
+	c.Check(isTombstone, gc.Equals, true,
+		gc.Commentf("the block must still be in place after the replacement was refused"))
 }

@@ -490,6 +490,12 @@ func (s *Server) Start() error {
 		s.st.StartReindex(s.settings.OpenPGP.DB.ReindexStartupDelaySecs, s.settings.OpenPGP.DB.ReindexLoadDelaySecs, s.settings.OpenPGP.DB.ReindexIntervalSecs)
 	}
 
+	// Started unconditionally, unlike reindexing above. Blocklist tombstones
+	// loaded from a keydump are stored unverified, and the sweep is what settles
+	// that; making it conditional on reindexOnStartup would let a supported
+	// configuration keep forged blocks hiding keys indefinitely.
+	s.st.StartVerifyBlocks(s.settings.OpenPGP.DB.ReindexStartupDelaySecs, s.settings.OpenPGP.DB.ReindexIntervalSecs)
+
 	return nil
 }
 
