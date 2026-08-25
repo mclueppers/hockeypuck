@@ -65,10 +65,9 @@ func runList(settings *server.Settings, args []string) error {
 	for origin, fingerprints := range blocklist.TrustedOrigins {
 		fmt.Fprintf(os.Stdout, "  %s\n", origin)
 		for _, fp := range fingerprints {
-			// The configuration accepts either form, so normalise before adding
-			// the prefix, or an 0x-prefixed entry prints as 0x0x...
-			bare := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(fp)), "0x")
-			fmt.Fprintf(os.Stdout, "      0x%s\n", bare)
+			// Print what the policy will actually match on, folded the same way
+			// it folds the configuration.
+			fmt.Fprintf(os.Stdout, "      0x%s\n", openpgp.NormalizeFingerprint(fp))
 		}
 	}
 	return nil

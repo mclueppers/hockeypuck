@@ -80,10 +80,11 @@ func TrustBlocklistOrigin(origin string, fingerprints []string) PolicyOption {
 			return errors.New("cannot trust an empty blocklist origin")
 		}
 		for _, fp := range fingerprints {
-			fp = strings.ToLower(strings.TrimSpace(fp))
-			// Accept the 0x form: it is what `hockeypuck-blocklist list` prints
-			// and what adminKeys tolerates, but lookups want bare hex.
-			fp = strings.TrimPrefix(fp, "0x")
+			// Fold to the bare lowercase hex that lookups use. Operators paste
+			// fingerprints from gpg output and from `list`, so tolerate the 0x
+			// form and the spacing and punctuation those carry; storing them
+			// verbatim would mean the entry never matched anything.
+			fp = NormalizeFingerprint(fp)
 			if fp == "" {
 				continue
 			}
@@ -100,6 +101,15 @@ func (p *Policy) BlocklistOrigin() string { return p.blocklistOrigin }
 // origin. An empty result means tombstones from that origin are not honoured.
 func (p *Policy) TrustedBlocklistKeys(origin string) []string {
 	return p.trustedOrigins[strings.ToLower(strings.TrimSpace(origin))]
+}
+
+// NormalizeFingerprint folds a fingerprint as an operator is likely to have
+// written it into the bare lowercase hex used for lookups, tolerating a leading
+// 0x and the spacing, colons and hyphens that appear in copy-pasted output.
+func NormalizeFingerprint(fp string) string {
+	fp = strings.ToLower(strings.TrimSpace(fp))
+	fp = strings.NewReplacer(" ", "", "\t", "", ":", "", "-", "").Replace(fp)
+	return strings.TrimPrefix(fp, "0x")
 }
 
 func (p Policy) IsPersistable(uid *UserID) bool {

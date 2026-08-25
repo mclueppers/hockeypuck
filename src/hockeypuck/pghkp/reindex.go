@@ -139,6 +139,12 @@ func (st *storage) StartReindex(reindexStartupDelaySecs, reindexLoadDelaySecs, r
 				if st.oldestIdxTime().Add(reindexLoadDelay).Before(time.Now()) {
 					st.Reindex()
 				}
+				// Blocks arriving by keydump are stored without being checked,
+				// because the key vouching for them is usually not loaded yet.
+				// This is where that debt is settled. It runs whether or not the
+				// reindex above was skipped: a load is exactly when there are
+				// unchecked blocks to look at.
+				st.verifyBlocks()
 				// a negative interval means "run only once"
 				if reindexIntervalSecs < 0 {
 					return nil

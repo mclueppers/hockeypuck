@@ -26,6 +26,7 @@ import (
 
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
+	"hockeypuck/pghkp/types"
 	"hockeypuck/pgtest"
 	hktesting "hockeypuck/testing"
 )
@@ -84,7 +85,8 @@ func (s *TS) TearDownTest(c *gc.C) {
 	s.PGSuite.TearDownTest(c)
 }
 
-// victim reads a key to be blocked, and stores it.
+// victim reads the key used as the subject of a block. It is not stored;
+// callers that need it present do that themselves.
 func (s *TS) victim(c *gc.C) *openpgp.PrimaryKey {
 	keys, err := openpgp.ReadArmorKeys(hktesting.MustInput("uat.asc"))
 	c.Assert(err, gc.IsNil)
@@ -125,22 +127,14 @@ func (s *TS) storedTag(c *gc.C, fingerprint string) (isTombstone, present bool) 
 }
 
 func (s *TS) componentCounts(c *gc.C, fingerprint string) (subkeys, userids int) {
-	rfp := reverse(fingerprint)
+	rfp := types.Reverse(fingerprint)
 	c.Assert(s.db.QueryRow("SELECT count(*) FROM subkeys WHERE rfingerprint = $1", rfp).Scan(&subkeys), gc.IsNil)
 	c.Assert(s.db.QueryRow("SELECT count(*) FROM userids WHERE rfingerprint = $1", rfp).Scan(&userids), gc.IsNil)
 	return subkeys, userids
 }
 
-func reverse(s string) string {
-	r := []rune(s)
-	for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
-		r[i], r[j] = r[j], r[i]
-	}
-	return string(r)
-}
-
-// TestUnsignedBlockRefused: a block with no signature is never admitted, however
-// trusted its origin.
+// TestUnsignedBlockRefused: a block with no signature is never admitted over the
+// network paths, however trusted its origin.
 func (s *TS) TestUnsignedBlockRefused(c *gc.C) {
 	s.trustOrigin(c)
 	victim := s.victim(c)
@@ -151,13 +145,34 @@ func (s *TS) TestUnsignedBlockRefused(c *gc.C) {
 	c.Check(present, gc.Equals, false)
 }
 
-// TestUntrustedOriginRefused: a correctly signed block from an origin this
-// server does not trust is refused. Here the origin's key is simply absent.
-func (s *TS) TestUntrustedOriginRefused(c *gc.C) {
+// TestUnknownOriginRefused: an origin the configuration says nothing about is
+// refused outright, however well signed the block is.
+func (s *TS) TestUnknownOriginRefused(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+
+	ts := openpgp.Tombstone{Fingerprint: victim.Fingerprint, Origin: "someone.else.example", Reason: "abuse"}
+	sig, err := openpgp.SignTombstone(ts, s.signer)
+	c.Assert(err, gc.IsNil)
+	tombstone, err := openpgp.NewTombstone(ts, sig)
+	c.Assert(err, gc.IsNil)
+
+	_, err = s.storage.Upsert(tombstone)
+	c.Assert(err, gc.NotNil)
+	c.Check(hkpstorage.IsBlockRefused(err), gc.Equals, true)
+	c.Check(err, gc.ErrorMatches, ".*no keys are trusted for blocklist origin.*")
+	_, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, false)
+}
+
+// TestTrustedOriginWithMissingKeyRefused: the origin is trusted, but the key
+// that vouches for it is not in the keyserver, so nothing can be verified.
+func (s *TS) TestTrustedOriginWithMissingKeyRefused(c *gc.C) {
 	victim := s.victim(c)
 	_, err := s.storage.Upsert(s.block(c, victim.Fingerprint, true))
 	c.Assert(err, gc.NotNil)
 	c.Check(hkpstorage.IsBlockRefused(err), gc.Equals, true)
+	c.Check(err, gc.ErrorMatches, ".*are in this keyserver.*")
 }
 
 // TestBlockReplacesKeyMaterial is the core behaviour: a block takes the key's
@@ -234,16 +249,13 @@ func (s *TS) TestQueryVisibility(c *gc.C) {
 	c.Check(records, gc.HasLen, 1)
 }
 
-// TestInsertAdmitsBlocksAfterKeyMaterial covers a keydump restore: the trusted
-// signing key and the blocks it signed arrive in one batch, and a block cannot
-// be admitted until the key vouching for it is stored.
-func (s *TS) TestInsertAdmitsBlocksAfterKeyMaterial(c *gc.C) {
+// TestInsertStoresBlocksUnchecked covers a keydump restore. The key vouching for
+// a block is usually in a different shard of the dump, so Insert stores blocks
+// without checking them and leaves the verdict to the preening sweep. Nothing
+// here trusts the origin, and the block is stored all the same.
+func (s *TS) TestInsertStoresBlocksUnchecked(c *gc.C) {
 	victim := s.victim(c)
-	batch := []*openpgp.PrimaryKey{
-		s.block(c, victim.Fingerprint, true), // deliberately before the key that vouches for it
-		s.origin,
-	}
-	_, _, err := s.storage.Insert(batch)
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, true)})
 	c.Assert(err, gc.IsNil)
 
 	isTombstone, present := s.storedTag(c, victim.Fingerprint)
@@ -251,12 +263,217 @@ func (s *TS) TestInsertAdmitsBlocksAfterKeyMaterial(c *gc.C) {
 	c.Check(isTombstone, gc.Equals, true)
 }
 
-// TestInsertCountsBlocks guards the counter: the bulk result used to overwrite
-// the tombstones already counted, under-reporting mixed batches.
-func (s *TS) TestInsertCountsBlocks(c *gc.C) {
+// TestInsertStoresEvenAnUnsignedBlock: the load path makes no judgement at all,
+// so even a block that could never verify is stored, for the sweep to remove.
+func (s *TS) TestInsertStoresEvenAnUnsignedBlock(c *gc.C) {
 	s.trustOrigin(c)
 	victim := s.victim(c)
-	_, n, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, true)})
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, false)})
 	c.Assert(err, gc.IsNil)
-	c.Check(n, gc.Equals, 1, gc.Commentf("a stored block should be counted as inserted"))
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true)
+	c.Check(isTombstone, gc.Equals, true)
+}
+
+// TestInsertDoesNotDoubleCount: a block is not key material, so it is reported
+// separately. Folding it into these totals counted a fingerprint whose material
+// and block were both in the batch once as inserted and again as updated.
+func (s *TS) TestInsertDoesNotDoubleCount(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+
+	u, n, err := s.storage.Insert([]*openpgp.PrimaryKey{
+		victim, s.block(c, victim.Fingerprint, true),
+	})
+	c.Assert(err, gc.IsNil)
+	c.Check(u+n, gc.Equals, 1,
+		gc.Commentf("one fingerprint went in, so the totals should account for one"))
+
+	// And the block is what survived.
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true)
+	c.Check(isTombstone, gc.Equals, true)
+}
+
+// TestBulkInsertAppliesBlocks covers the bulk path, which the batches above are
+// too small to reach. Bulk insertion skips any fingerprint already in keys, so a
+// block has to be applied outside it or it would count as a duplicate and the
+// key would survive.
+func (s *TS) TestBulkInsertAppliesBlocks(c *gc.C) {
+	restore := minKeys2UseBulk
+	minKeys2UseBulk = 2
+	defer func() { minKeys2UseBulk = restore }()
+
+	s.trustOrigin(c)
+	victim := s.victim(c)
+	filler, err := openpgp.ReadArmorKeys(hktesting.MustInput("alice_signed.asc"))
+	c.Assert(err, gc.IsNil)
+	c.Assert(filler, gc.HasLen, 1)
+
+	// Key material and its block in one batch, large enough to take the bulk path.
+	batch := []*openpgp.PrimaryKey{victim, filler[0], s.block(c, victim.Fingerprint, true)}
+	_, _, err = s.storage.Insert(batch)
+	c.Assert(err, gc.IsNil)
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true)
+	c.Check(isTombstone, gc.Equals, true,
+		gc.Commentf("a block must displace key material even when the batch went through bulk insertion"))
+	subkeys, userids := s.componentCounts(c, victim.Fingerprint)
+	c.Check(subkeys, gc.Equals, 0)
+	c.Check(userids, gc.Equals, 0)
+
+	// The unrelated key in the same batch is unaffected.
+	_, present = s.storedTag(c, filler[0].Fingerprint)
+	c.Check(present, gc.Equals, true)
+}
+
+// TestInsertSurvivesAnErrorHeavyBatch: giving up on a batch full of bad key
+// material must not discard the blocks that batch also carried.
+func (s *TS) TestInsertSurvivesAnErrorHeavyBatch(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+
+	batch := []*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, true)}
+	for i := 0; i < maxInsertErrors+2; i++ {
+		// A key with no packet data at all fails to store.
+		batch = append(batch, &openpgp.PrimaryKey{})
+	}
+	s.storage.Insert(batch)
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true, gc.Commentf("the block must outlive the failures around it"))
+	c.Check(isTombstone, gc.Equals, true)
+}
+
+// TestReindexLeavesBlocksAlone: the reindexing pass sweeps the keys table with
+// raw SQL, so it sees blocks whether or not other queries hide them. It must
+// treat one as a no-op rather than evaporating it or rewriting its keywords.
+//
+// This also matters for any future deferred verification: that pass is the
+// natural place to hang it, and it has to cope with blocks first.
+func (s *TS) TestReindexLeavesBlocksAlone(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+	_, err := s.storage.Upsert(s.block(c, victim.Fingerprint, true))
+	c.Assert(err, gc.IsNil)
+
+	before, _ := s.storedTag(c, victim.Fingerprint)
+	c.Assert(before, gc.Equals, true)
+
+	c.Assert(s.storage.Reindex(), gc.IsNil)
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true, gc.Commentf("reindexing must not remove a block"))
+	c.Check(isTombstone, gc.Equals, true)
+
+	// And it is still readable as the block it was.
+	records, err := s.storage.FetchRecordsByFp([]string{victim.Fingerprint}, hkpstorage.IncludeTombstones)
+	c.Assert(err, gc.IsNil)
+	c.Assert(records, gc.HasLen, 1)
+	ts, sigs, err := openpgp.TombstoneOf(records[0].PrimaryKey)
+	c.Assert(err, gc.IsNil)
+	c.Check(ts.Origin, gc.Equals, tsOrigin)
+	c.Check(sigs, gc.HasLen, 1, gc.Commentf("the origin signature must survive reindexing"))
+}
+
+// TestVerifyBlocksRemovesForgeries: the sweep settles the debt the load path
+// leaves. A block that cannot possibly verify is removed, and the key it was
+// hiding becomes available again.
+func (s *TS) TestVerifyBlocksRemovesForgeries(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+
+	// Stored the way a keydump would store it: unchecked.
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, false)})
+	c.Assert(err, gc.IsNil)
+	isTombstone, _ := s.storedTag(c, victim.Fingerprint)
+	c.Assert(isTombstone, gc.Equals, true)
+
+	s.storage.verifyBlocks()
+
+	_, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, false, gc.Commentf("an unsigned block must not survive the sweep"))
+}
+
+// TestVerifyBlocksKeepsValidOnes: a block that does verify is left alone, so the
+// sweep is not simply deleting everything it looks at.
+func (s *TS) TestVerifyBlocksKeepsValidOnes(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, true)})
+	c.Assert(err, gc.IsNil)
+
+	s.storage.verifyBlocks()
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true, gc.Commentf("a valid block must survive the sweep"))
+	c.Check(isTombstone, gc.Equals, true)
+}
+
+// TestVerifyBlocksLeavesUnjudgeableOnes: when this server cannot judge a block -
+// the origin is not configured, or the key that would vouch for it is absent -
+// it is kept. Removing it would let a typo in trustedOrigins, or a signing key
+// not yet loaded, silently withdraw blocks the operator asked for.
+func (s *TS) TestVerifyBlocksLeavesUnjudgeableOnes(c *gc.C) {
+	victim := s.victim(c)
+	// Note: no trustOrigin, so the signing key is not in the keyserver.
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, true)})
+	c.Assert(err, gc.IsNil)
+
+	s.storage.verifyBlocks()
+
+	isTombstone, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, true,
+		gc.Commentf("a block we cannot check must be kept, not silently withdrawn"))
+	c.Check(isTombstone, gc.Equals, true)
+}
+
+// TestVerifyBlocksPagesThroughAll: a keydump load stamps every row it writes
+// with the same timestamp, so a sweep that paged on mtime would stop after the
+// first bunch. Force a bunch size of one and check every block is still seen.
+func (s *TS) TestVerifyBlocksPagesThroughAll(c *gc.C) {
+	s.trustOrigin(c)
+	// Three unsigned blocks, all written in one Insert so they share an mtime.
+	fingerprints := []string{
+		"81279eee7ec89fb781702adaf79362da44a2d1db",
+		"10fe8cf1b483f7525039aa2a361bc1f023e0dcca",
+		"abd00913019d6354ba1d9a132839fe0d796198b1",
+	}
+	var batch []*openpgp.PrimaryKey
+	for _, fp := range fingerprints {
+		batch = append(batch, s.block(c, fp, false))
+	}
+	_, _, err := s.storage.Insert(batch)
+	c.Assert(err, gc.IsNil)
+	for _, fp := range fingerprints {
+		isTombstone, _ := s.storedTag(c, fp)
+		c.Assert(isTombstone, gc.Equals, true)
+	}
+
+	// One at a time, so paging has to work for all three to be reached.
+	seen := map[string]bool{}
+	bookmark := ""
+	for {
+		records, err := s.storage.blocksAfter(bookmark, 1)
+		c.Assert(err, gc.IsNil)
+		if len(records) == 0 {
+			break
+		}
+		for _, record := range records {
+			c.Assert(seen[record.Fingerprint], gc.Equals, false,
+				gc.Commentf("paging returned 0x%s twice", record.Fingerprint))
+			seen[record.Fingerprint] = true
+			bookmark = record.Fingerprint
+		}
+	}
+	c.Check(seen, gc.HasLen, len(fingerprints),
+		gc.Commentf("every block must be reachable by paging, not just the first bunch"))
+
+	// And the sweep removes all of them, not just the first.
+	s.storage.verifyBlocks()
+	for _, fp := range fingerprints {
+		_, present := s.storedTag(c, fp)
+		c.Check(present, gc.Equals, false, gc.Commentf("0x%s survived the sweep", fp))
+	}
 }

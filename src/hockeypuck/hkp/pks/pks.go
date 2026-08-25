@@ -220,14 +220,23 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	// The query has no ORDER BY, so sort before advancing the bookmark past
+	// anything: taking records as they arrive could move LastSync beyond a key
+	// that has not been sent yet, and that key would then never be sent.
+	sort.Slice(records, func(i, j int) bool { return records[i].MTime.Before(records[j].MTime) })
 	for _, record := range records {
 		// Take care, because records can contain nils
 		if record.PrimaryKey == nil {
 			continue
 		}
 		if openpgp.IsTombstone(record.PrimaryKey) {
-			// Nothing to send, but the bookmark must still move past it.
+			// Nothing to send, but the bookmark must still move past it, and it
+			// must be persisted: a batch of nothing but blocks would otherwise
+			// leave LastSync where it was and be re-read on every cycle.
 			status.LastSync = record.MTime
+			if err := sender.storage.PKSUpdate(status); err != nil {
+				return errors.WithStack(err)
+			}
 			continue
 		}
 		log.Debugf("sending key %q to PKS %s", record.Fingerprint, status.Addr)

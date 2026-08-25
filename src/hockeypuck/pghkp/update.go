@@ -154,7 +154,9 @@ func (st *storage) Upsert(pubkey *openpgp.PrimaryKey) (hkpstorage.KeyChange, err
 		// point of the block is that the key is gone. Without this, a block for
 		// a key this server already holds would be merged into it, which is
 		// neither meaningful nor what was asked for.
-		return st.Replace(pubkey)
+		//
+		// Upsert admitted it above, so use the form that does not re-verify.
+		return st.replaceAdmitted(pubkey)
 	}
 
 	// The key already exists; merge the incoming key into it. errTargetMissing
@@ -306,7 +308,10 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 			if count, max := len(result.Errors), maxInsertErrors; count > max {
 				result.Errors = append(result.Errors,
 					errors.Errorf("too many insert errors (%d > %d), bailing...", count, max))
-				return u, n, result
+				// Stop taking key material, but fall through to the blocks
+				// below: giving up on a bad batch must not discard the blocks it
+				// carried.
+				break
 			}
 
 			kc, err := st.Upsert(key)
@@ -337,18 +342,31 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 	// already in keys, so a block for a key this server holds would count as a
 	// duplicate and be dropped. Upsert routes each to Replace instead, which
 	// clears the displaced key's components and notifies.
-	for _, tombstone := range st.admitTombstones(blocked, &result) {
-		kc, err := st.Upsert(tombstone)
-		if err != nil {
+	var blocksStored int
+	for _, tombstone := range blocked {
+		// Deliberately not admitted here. Insert is reached only from
+		// hockeypuck-load, i.e. from a file an operator chose to load, and at
+		// that point the key that vouches for a block is usually not in the
+		// database yet: keydumps are sharded by fingerprint, and a block is
+		// keyed on its victim's, so the origin's signing key is almost always in
+		// a different file. Admitting here would reject nearly every block in a
+		// restore.
+		//
+		// The signature is checked instead by the preening sweep, once the whole
+		// dump is in. Until then a block from a bad dump can wrongly hide a key,
+		// which is local and reversible; rejecting the dump's blocks outright is
+		// neither.
+		if _, err := st.replaceAdmitted(tombstone); err != nil {
 			result.Errors = append(result.Errors, err)
 			continue
 		}
-		switch kc.(type) {
-		case hkpstorage.KeyAdded:
-			n++
-		case hkpstorage.KeyReplaced:
-			u++
-		}
+		blocksStored++
+	}
+	if blocksStored > 0 {
+		// Deliberately not folded into u/n. A block is not key material, and a
+		// fingerprint whose material and block are both in this batch would
+		// otherwise be counted once as inserted and again as updated.
+		log.Infof("%d blocklist tombstones stored unverified, pending the next preening sweep", blocksStored)
 	}
 
 	if len(result.Duplicates) > 0 || len(result.Errors) > 0 {
@@ -357,10 +375,20 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 	return u, n, nil
 }
 
-func (st *storage) Replace(key *openpgp.PrimaryKey) (_ hkpstorage.KeyChange, retErr error) {
+// Replace unconditionally replaces any stored key with the given contents,
+// except that it will not withdraw a blocklist tombstone; only an explicit
+// unblock may do that.
+func (st *storage) Replace(key *openpgp.PrimaryKey) (hkpstorage.KeyChange, error) {
 	if err := st.admitTombstone(key); err != nil {
 		return nil, errors.WithStack(err)
 	}
+	return st.replaceAdmitted(key)
+}
+
+// replaceAdmitted is Replace for a key that has already passed admission, so
+// that callers which have just admitted it do not verify the same signature a
+// second time.
+func (st *storage) replaceAdmitted(key *openpgp.PrimaryKey) (_ hkpstorage.KeyChange, retErr error) {
 	tx, err := st.Begin()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -376,13 +404,17 @@ func (st *storage) Replace(key *openpgp.PrimaryKey) (_ hkpstorage.KeyChange, ret
 		// Replace deletes whatever is stored before inserting, so without this
 		// ordinary key material would quietly remove a block and take its place.
 		// Only an explicit unblock may withdraw one.
-		blocked, err := st.isBlocked(key.Fingerprint)
+		//
+		// The check runs inside the transaction, and locks the row, so that a
+		// block committed concurrently cannot slip in between deciding and
+		// deleting.
+		blockedMD5, err := blockedInTx(tx, key.Fingerprint)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		if blocked != nil {
+		if blockedMD5 != "" {
 			log.Debugf("refused replacement of blocked key fp=%s", key.Fingerprint)
-			return hkpstorage.KeyBlocked{ID: key.KeyID, Digest: blocked.MD5}, nil
+			return hkpstorage.KeyBlocked{ID: key.KeyID, Digest: blockedMD5}, nil
 		}
 	}
 

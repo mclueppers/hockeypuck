@@ -18,12 +18,63 @@
 package pghkp
 
 import (
+	"database/sql"
+	"encoding/json"
+
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 
+	"hockeypuck/hkp/jsonhkp"
 	hkpstorage "hockeypuck/hkp/storage"
 	"hockeypuck/openpgp"
 )
+
+// blockVerdict is the outcome of checking a stored or incoming block.
+type blockVerdict int
+
+const (
+	// blockValid: the signature verifies against a key trusted for its origin.
+	blockValid blockVerdict = iota
+	// blockUnverifiable: nothing is wrong with the block, but this server
+	// cannot judge it - the origin is not configured, or the key that would
+	// vouch for it is not in the keyserver.
+	blockUnverifiable
+	// blockInvalid: the block is malformed, unsigned, or its signature does not
+	// verify against the keys trusted for the origin it claims.
+	blockInvalid
+)
+
+// judgeTombstone decides what this server can say about a block.
+func (st *storage) judgeTombstone(key *openpgp.PrimaryKey) (blockVerdict, error) {
+	ts, sigs, err := openpgp.TombstoneOf(key)
+	if err != nil {
+		return blockInvalid, errors.Wrap(err, "malformed tombstone")
+	}
+	fingerprints := st.policy.TrustedBlocklistKeys(ts.Origin)
+	if len(fingerprints) == 0 {
+		return blockUnverifiable, errors.Errorf(
+			"no keys are trusted for blocklist origin %q", ts.Origin)
+	}
+	records, err := st.FetchRecordsByFp(fingerprints)
+	if err != nil {
+		return blockUnverifiable, errors.Wrapf(err,
+			"cannot load trusted keys for blocklist origin %q", ts.Origin)
+	}
+	var trusted []*openpgp.PrimaryKey
+	for _, record := range records {
+		if record.PrimaryKey != nil {
+			trusted = append(trusted, record.PrimaryKey)
+		}
+	}
+	if len(trusted) == 0 {
+		return blockUnverifiable, errors.Errorf(
+			"none of the keys trusted for origin %q are in this keyserver", ts.Origin)
+	}
+	if _, err := openpgp.VerifyTombstone(*ts, sigs, trusted); err != nil {
+		return blockInvalid, err
+	}
+	return blockValid, nil
+}
 
 // admitTombstone decides whether an incoming blocklist tombstone may be stored.
 //
@@ -40,44 +91,12 @@ func (st *storage) admitTombstone(key *openpgp.PrimaryKey) error {
 	if !openpgp.IsTombstone(key) {
 		return nil
 	}
-	ts, sigs, err := openpgp.TombstoneOf(key)
-	if err != nil {
-		return errors.Wrap(hkpstorage.ErrBlockRefused, "malformed tombstone: "+err.Error())
+	verdict, err := st.judgeTombstone(key)
+	if verdict == blockValid {
+		log.Debugf("admitted tombstone for 0x%s", key.Fingerprint)
+		return nil
 	}
-
-	fingerprints := st.policy.TrustedBlocklistKeys(ts.Origin)
-	if len(fingerprints) == 0 {
-		return errors.Wrapf(hkpstorage.ErrBlockRefused,
-			"tombstone for 0x%s: no keys are trusted for blocklist origin %q",
-			ts.Fingerprint, ts.Origin)
-	}
-
-	// Deliberately without AutoPreen: this runs on the ingest path, and a
-	// write-back here would mutate storage while it is being written to.
-	// Tombstones are filtered out of this query, so one cannot vouch for another.
-	records, err := st.FetchRecordsByFp(fingerprints)
-	if err != nil {
-		return errors.Wrapf(err, "cannot load trusted keys for blocklist origin %q", ts.Origin)
-	}
-	var trusted []*openpgp.PrimaryKey
-	for _, record := range records {
-		if record.PrimaryKey != nil {
-			trusted = append(trusted, record.PrimaryKey)
-		}
-	}
-	if len(trusted) == 0 {
-		return errors.Wrapf(hkpstorage.ErrBlockRefused,
-			"tombstone for 0x%s: none of the keys trusted for origin %q are in this keyserver",
-			ts.Fingerprint, ts.Origin)
-	}
-
-	signer, err := openpgp.VerifyTombstone(*ts, sigs, trusted)
-	if err != nil {
-		return errors.Wrapf(hkpstorage.ErrBlockRefused, "tombstone for 0x%s: %v", ts.Fingerprint, err)
-	}
-	log.Debugf("admitted tombstone for 0x%s from origin %q, signed by 0x%s",
-		ts.Fingerprint, ts.Origin, signer)
-	return nil
+	return errors.Wrapf(hkpstorage.ErrBlockRefused, "tombstone for 0x%s: %v", key.Fingerprint, err)
 }
 
 // admitTombstones splits a batch into the keys that may be stored and the
@@ -96,17 +115,110 @@ func (st *storage) admitTombstones(keys []*openpgp.PrimaryKey, result *hkpstorag
 	return admitted
 }
 
-// isBlocked returns the stored tombstone for a fingerprint, or nil if the
-// fingerprint is not blocked.
-func (st *storage) isBlocked(fingerprint string) (*hkpstorage.Record, error) {
-	records, err := st.FetchRecordsByFp([]string{fingerprint}, hkpstorage.IncludeTombstones)
-	if err != nil {
-		return nil, errors.WithStack(err)
+// blockedInTx reports the digest of the tombstone stored for a fingerprint, or
+// the empty string if the fingerprint is not blocked.
+//
+// It runs inside the caller's transaction and takes a row lock, so that a
+// decision made here still holds when the caller acts on it.
+func blockedInTx(tx *sql.Tx, fingerprint string) (string, error) {
+	var md5, doc string
+	err := tx.QueryRow("SELECT md5, doc::TEXT FROM keys WHERE rfingerprint = reverse($1) FOR UPDATE",
+		fingerprint).Scan(&md5, &doc)
+	if err == sql.ErrNoRows {
+		return "", nil
 	}
-	for _, record := range records {
-		if record.Fingerprint == fingerprint && openpgp.IsTombstone(record.PrimaryKey) {
-			return record, nil
+	if err != nil {
+		return "", errors.WithStack(err)
+	}
+	var pk jsonhkp.PrimaryKey
+	if err := json.Unmarshal([]byte(doc), &pk); err != nil {
+		return "", errors.WithStack(err)
+	}
+	// A tombstone is rooted at a trust packet; ordinary key material is rooted
+	// at a public key packet.
+	if pk.Packet == nil || pk.Packet.Tag != 12 {
+		return "", nil
+	}
+	return md5, nil
+}
+
+// verifyBlocks re-checks the blocks this server is holding, and removes the ones
+// it can prove are bad.
+//
+// hockeypuck-load stores blocks without checking them, because on a keydump
+// restore the key that vouches for a block is usually not in the database yet.
+// This is where that check is made good, once the whole dump is in.
+//
+// A block whose signature does not verify is deleted: it is forged or corrupt,
+// and the key it names should never have been hidden. A block this server merely
+// cannot judge - because the origin is not configured, or the key that would
+// vouch for it is absent - is left alone and counted. Deleting those would mean
+// a typo in trustedOrigins, or a signing key not yet loaded, silently withdrew
+// blocks the operator had asked for.
+func (st *storage) verifyBlocks() {
+	var checked, removed, unverifiable int
+	// Page on the fingerprint, not on mtime: a keydump load stamps every row it
+	// writes with the same timestamp, so an mtime bookmark would stop dead after
+	// the first bunch and leave the rest of them unchecked.
+	bookmark := ""
+
+	for {
+		select {
+		case <-st.t.Dying():
+			return
+		default:
+		}
+
+		records, err := st.blocksAfter(bookmark, internalQueryLimit)
+		if err != nil {
+			log.Errorf("could not scan blocklist tombstones: %v", err)
+			return
+		}
+		if len(records) == 0 {
+			break
+		}
+		for _, record := range records {
+			bookmark = record.Fingerprint
+			if record.PrimaryKey == nil {
+				continue
+			}
+			checked++
+			verdict, err := st.judgeTombstone(record.PrimaryKey)
+			switch verdict {
+			case blockValid:
+			case blockUnverifiable:
+				unverifiable++
+				log.Warnf("cannot verify block on 0x%s, leaving it in place: %v",
+					record.Fingerprint, err)
+			case blockInvalid:
+				log.Errorf("removing unverifiable block on 0x%s: %v", record.Fingerprint, err)
+				if _, delErr := st.Delete(record.Fingerprint); delErr != nil {
+					log.Errorf("could not remove bad block on 0x%s: %v", record.Fingerprint, delErr)
+					continue
+				}
+				removed++
+			}
 		}
 	}
-	return nil, nil
+
+	if checked == 0 {
+		return
+	}
+	log.Infof("checked %d blocklist tombstones: %d removed as invalid, %d could not be verified",
+		checked, removed, unverifiable)
+}
+
+// blocksAfter returns a bounded bunch of stored tombstones ordered by reversed
+// fingerprint, so that the sweep can page through them all. The ordering column
+// is the primary key, which is unique; paging on a timestamp would lose rows
+// whenever more than a bunch of them shared one.
+func (st *storage) blocksAfter(afterFingerprint string, limit int) ([]*hkpstorage.Record, error) {
+	// Ordered and paged on the same expression, which is also the one the
+	// keys_tombstones index is built over. Paging on a timestamp instead would
+	// lose rows whenever more than a bunch of them shared one.
+	return st.fetchRecordsByQuery(
+		[]string{"WHERE reverse(rfingerprint) > $1 AND doc->'packet'->>'tag' = '12'"},
+		"ORDER BY 1 LIMIT $2",
+		[]any{afterFingerprint, limit},
+		hkpstorage.IncludeTombstones)
 }

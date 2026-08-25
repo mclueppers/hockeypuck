@@ -119,9 +119,7 @@ func normaliseFingerprints(args []string) ([]string, error) {
 	var bad []string
 	seen := map[string]bool{}
 	for _, arg := range args {
-		fp := strings.ToLower(strings.TrimSpace(arg))
-		fp = strings.NewReplacer(" ", "", "\t", "", ":", "", "-", "").Replace(fp)
-		fp = strings.TrimPrefix(fp, "0x")
+		fp := openpgp.NormalizeFingerprint(arg)
 		switch len(fp) {
 		case 32, 40, 64:
 		default:
