@@ -658,8 +658,10 @@ func (h *Handler) get(w http.ResponseWriter, l *Lookup) {
 			}
 		}
 		if len(safeKeys) == 0 {
-			httpError(w, http.StatusNotFound, errors.New("no keys left in legacy api"))
-			w.Write([]byte("Legacy HKP will not return keys >v5, to protect older clients\n"))
+			httpError(w, http.StatusNotFound, errors.New("no safe keys left in legacy api"))
+			if len(keys) > 0 {
+				w.Write([]byte("Legacy HKP will not return keys >v5, to protect older clients\n"))
+			}
 			return
 		}
 
@@ -699,25 +701,28 @@ func (h *Handler) index(w http.ResponseWriter, l *Lookup, f IndexFormat) {
 		return
 	}
 
+	safeKeys := []*openpgp.PrimaryKey{}
 	if l.Options[OptionMachineReadable] {
 		f = mrFormat
+		// Drop v6 keys from the index in the legacy machine-readable interface
+		for _, key := range keys {
+			if key.Version < 6 {
+				safeKeys = append(safeKeys, key)
+			}
+		}
+		if len(safeKeys) == 0 {
+			httpError(w, http.StatusNotFound, errors.New("no safe keys left in legacy machine-readable api"))
+			if len(keys) > 0 {
+				w.Write([]byte("Legacy HKP will not return keys >v5, to protect older clients\n"))
+			}
+			return
+		}
+	} else {
+		safeKeys = keys
 	}
 
 	if l.Options[OptionJSON] || f == nil {
 		f = jsonFormat
-	}
-
-	// Drop v6 keys from the index in the legacy interface by default
-	safeKeys := []*openpgp.PrimaryKey{}
-	for _, key := range keys {
-		if key.Version < 6 {
-			safeKeys = append(safeKeys, key)
-		}
-	}
-	if len(safeKeys) == 0 {
-		httpError(w, http.StatusNotFound, errors.New("no keys left in legacy api"))
-		w.Write([]byte("Legacy HKP will not return keys >v5, to protect older clients\n"))
-		return
 	}
 
 	err = f.Write(w, l, safeKeys)
