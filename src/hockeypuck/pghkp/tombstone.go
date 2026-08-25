@@ -95,3 +95,18 @@ func (st *storage) admitTombstones(keys []*openpgp.PrimaryKey, result *hkpstorag
 	}
 	return admitted
 }
+
+// isBlocked returns the stored tombstone for a fingerprint, or nil if the
+// fingerprint is not blocked.
+func (st *storage) isBlocked(fingerprint string) (*hkpstorage.Record, error) {
+	records, err := st.FetchRecordsByFp([]string{fingerprint}, hkpstorage.IncludeTombstones)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	for _, record := range records {
+		if record.Fingerprint == fingerprint && openpgp.IsTombstone(record.PrimaryKey) {
+			return record, nil
+		}
+	}
+	return nil, nil
+}

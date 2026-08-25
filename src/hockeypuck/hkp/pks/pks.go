@@ -211,13 +211,23 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		return nil
 	}
 
-	records, err := sender.hkpStorage.FetchRecordsByFp(fps)
+	// Ask for tombstones too. They are not sent - PKS carries key material, and a
+	// blocklist tombstone is not that - but they must be seen here so that
+	// LastSync can advance past them. Filtering them out earlier would leave a
+	// batch of nothing but blocks unable to move the bookmark, and it would be
+	// retried indefinitely.
+	records, err := sender.hkpStorage.FetchRecordsByFp(fps, hkpstorage.IncludeTombstones)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	for _, record := range records {
 		// Take care, because records can contain nils
 		if record.PrimaryKey == nil {
+			continue
+		}
+		if openpgp.IsTombstone(record.PrimaryKey) {
+			// Nothing to send, but the bookmark must still move past it.
+			status.LastSync = record.MTime
 			continue
 		}
 		log.Debugf("sending key %q to PKS %s", record.Fingerprint, status.Addr)

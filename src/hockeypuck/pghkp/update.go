@@ -276,29 +276,8 @@ func partitionTombstones(keys []*openpgp.PrimaryKey) (material, blocked []*openp
 func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 	var result hkpstorage.InsertError
 
-	// Filter here rather than below, so that the bulk path is covered as well
-	// as the one-at-a-time fallback.
-	keys = st.admitTombstones(keys, &result)
-
-	// Tombstones cannot go through bulk insertion. It filters out every
-	// fingerprint already present in keys, so a block for a key this server
-	// holds would be counted as a duplicate and silently dropped, leaving the
-	// key in place. Take them one at a time instead, where Upsert routes them to
-	// Replace and the displaced key's components and notifications are handled.
+	// Separate blocks from key material; they are dealt with after it, below.
 	keys, blocked := partitionTombstones(keys)
-	for _, tombstone := range blocked {
-		kc, err := st.Upsert(tombstone)
-		if err != nil {
-			result.Errors = append(result.Errors, err)
-			continue
-		}
-		switch kc.(type) {
-		case hkpstorage.KeyAdded:
-			n++
-		case hkpstorage.KeyReplaced:
-			u++
-		}
-	}
 
 	bulkOK, bulkSkip := false, false
 	if len(keys) >= minKeys2UseBulk {
@@ -308,7 +287,9 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 			log.Warnf("could not create temp tables: %v", err)
 		} else {
 			defer bs.bulkDropTempTables()
-			n, _, bulkOK = bs.bulkInsert(keys, &result, []string{})
+			var bulkInserted int
+			bulkInserted, _, bulkOK = bs.bulkInsert(keys, &result, []string{})
+			n += bulkInserted
 		}
 	} else {
 		bulkSkip = true
@@ -346,6 +327,30 @@ func (st *storage) Insert(keys []*openpgp.PrimaryKey) (u, n int, retErr error) {
 		}
 	}
 
+	// Blocks are admitted only now, once this batch's key material is stored. A
+	// keydump restore carries the trusted signing key and the blocks it signed
+	// in the same batch, and a block cannot be admitted until the key that
+	// vouches for it is present; admitting first would reject every block on a
+	// restore into an empty database.
+	//
+	// They also cannot go through bulk insertion, which skips any fingerprint
+	// already in keys, so a block for a key this server holds would count as a
+	// duplicate and be dropped. Upsert routes each to Replace instead, which
+	// clears the displaced key's components and notifies.
+	for _, tombstone := range st.admitTombstones(blocked, &result) {
+		kc, err := st.Upsert(tombstone)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			continue
+		}
+		switch kc.(type) {
+		case hkpstorage.KeyAdded:
+			n++
+		case hkpstorage.KeyReplaced:
+			u++
+		}
+	}
+
 	if len(result.Duplicates) > 0 || len(result.Errors) > 0 {
 		return u, n, result
 	}
@@ -367,6 +372,20 @@ func (st *storage) Replace(key *openpgp.PrimaryKey) (_ hkpstorage.KeyChange, ret
 			retErr = tx.Commit()
 		}
 	}()
+	if !openpgp.IsTombstone(key) {
+		// Replace deletes whatever is stored before inserting, so without this
+		// ordinary key material would quietly remove a block and take its place.
+		// Only an explicit unblock may withdraw one.
+		blocked, err := st.isBlocked(key.Fingerprint)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if blocked != nil {
+			log.Debugf("refused replacement of blocked key fp=%s", key.Fingerprint)
+			return hkpstorage.KeyBlocked{ID: key.KeyID, Digest: blocked.MD5}, nil
+		}
+	}
+
 	// A not-found here just means there was nothing to replace; Replace is
 	// documented to add the key in that case, so carry on with an empty prior
 	// md5 (which yields a KeyAdded change below).
