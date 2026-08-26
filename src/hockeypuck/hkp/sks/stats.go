@@ -29,11 +29,11 @@ import (
 )
 
 type LoadStat struct {
-	Inserted       int
-	Updated        int
-	Removed        int
-	InsertedJitter int
-	RemovedJitter  int
+	Inserted       int `json:"inserted"`
+	Updated        int `json:"updated"`
+	Removed        int `json:"removed"`
+	InsertedJitter int `json:"insertedJitter"`
+	RemovedJitter  int `json:"removedJitter"`
 }
 
 type LoadStatMap map[time.Time]*LoadStat

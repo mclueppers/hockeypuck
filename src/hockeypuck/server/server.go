@@ -251,7 +251,7 @@ type statsQueryConfig struct {
 
 type loadStat struct {
 	*sks.LoadStat
-	Time time.Time
+	Time time.Time `json:"time"`
 }
 
 // maskString replace input string with * to hide sensitive information
