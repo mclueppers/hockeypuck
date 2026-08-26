@@ -133,6 +133,8 @@ PG_DATA_MOUNT=/var/lib/postgresql
 Then incant `docker-compose up -d` and wait for the in-place upgrade to finish.
 Once finished, hockeypuck should start up automatically.
 
+Be sure to always use the `*-debian` version tags with the pgautoupgrade image, otherwise you may get permission errors on startup.
+
 ## HAProxy
 
 The HAProxy template configuration is volatile and may change significantly between releases.

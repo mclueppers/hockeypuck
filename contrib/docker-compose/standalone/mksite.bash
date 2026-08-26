@@ -42,6 +42,8 @@ FINGERPRINT=0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF
 ACME_SERVER=
 
 # Use postgres image with in-place upgrade capability
+# Be sure to always use the `*-debian` version tags with the pgautoupgrade image
+# otherwise you may get permission errors on startup
 POSTGRES_IMAGE=pgautoupgrade/pgautoupgrade
 POSTGRES_VERSION=18-debian
 PG_DATA_MOUNT=/var/lib/postgresql
@@ -130,6 +132,8 @@ cat >>"$HERE/.env" <<EOF
 
 # Uncomment the below to use postgres 18+ (with in-place upgrades)
 # Make sure to comment out any conflicting POSTGRES_VERSION definitions above
+# Be sure also to always use the `*-debian` version tags with the pgautoupgrade image
+# otherwise you may get permission errors on startup
 #POSTGRES_IMAGE=pgautoupgrade/pgautoupgrade
 #POSTGRES_VERSION=18-debian
 #PG_DATA_MOUNT=/var/lib/postgresql

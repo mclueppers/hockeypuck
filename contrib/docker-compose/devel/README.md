@@ -33,3 +33,5 @@ POSTGRES_IMAGE=pgautoupgrade/pgautoupgrade
 POSTGRES_VERSION=18-debian
 PG_DATA_MOUNT=/var/lib/postgresql
 ```
+
+Be sure to always use the `*-debian` version tags with the pgautoupgrade image, otherwise you may get permission errors on startup.
