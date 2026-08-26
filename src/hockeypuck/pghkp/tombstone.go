@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -271,6 +272,64 @@ func (st *storage) verifyBlocks() {
 	}
 	log.Infof("checked %d blocklist tombstones: %d removed as invalid, %d could not be verified",
 		checked, removed, unverifiable)
+}
+
+// ensureTombstoneIndex builds the partial index the sweep pages through.
+//
+// It is built here rather than in createIndexes, and CONCURRENTLY, because it is
+// the one index this series adds to a table that existing servers have already
+// filled. A plain CREATE INDEX in createIndexes' single transaction would make
+// the first startup after an upgrade evaluate the predicate over every row of
+// keys - detoasting each doc to do it - while holding a lock that blocks
+// writes. On a keyserver holding millions of keys that is a long, silent stall,
+// and "it matches no rows" is no help: PostgreSQL has to read them all to find
+// that out.
+//
+// CONCURRENTLY cannot run inside a transaction, so this runs on the pool and in
+// the background. Failure is not fatal: blocksAfter is correct without the
+// index, only slower.
+func (st *storage) ensureTombstoneIndex() {
+	exists, valid, err := st.tombstoneIndexState()
+	if err != nil {
+		log.Warnf("could not check for the %s index: %v", tombstoneIndexName, err)
+		return
+	}
+	if exists && valid {
+		return
+	}
+	if exists {
+		// A previous CONCURRENTLY build was interrupted and left the index
+		// behind, unusable. IF NOT EXISTS would keep it, so clear it first.
+		log.Warnf("%s was left invalid by an interrupted build; rebuilding it", tombstoneIndexName)
+		if _, err := st.Exec("DROP INDEX CONCURRENTLY IF EXISTS " + tombstoneIndexName); err != nil {
+			log.Errorf("could not drop the invalid %s index: %v", tombstoneIndexName, err)
+			return
+		}
+	}
+	log.Infof("building the %s index in the background; blocklist sweeps scan the keys table until it is ready",
+		tombstoneIndexName)
+	start := time.Now()
+	if _, err := st.Exec(tombstoneIndexSQL); err != nil {
+		log.Errorf("could not build the %s index; blocklist sweeps will scan instead: %v",
+			tombstoneIndexName, err)
+		return
+	}
+	log.Infof("built the %s index in %v", tombstoneIndexName, time.Since(start))
+}
+
+// tombstoneIndexState reports whether the index is there, and whether it is
+// usable: an interrupted CONCURRENTLY build leaves one that exists but is not.
+func (st *storage) tombstoneIndexState() (exists, valid bool, _ error) {
+	err := st.QueryRow(
+		"SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = $1",
+		tombstoneIndexName).Scan(&valid)
+	if err == sql.ErrNoRows {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, errors.WithStack(err)
+	}
+	return true, valid, nil
 }
 
 // removeInvalidBlock deletes a block, but only if it is still the same bad block

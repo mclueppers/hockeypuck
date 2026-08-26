@@ -165,6 +165,12 @@ func (st *storage) StartReindex(reindexStartupDelaySecs, reindexLoadDelaySecs, r
 // tree, so it needs the server stopped, and every load is therefore followed by
 // a start.
 func (st *storage) StartVerifyBlocks(startupDelaySecs, intervalSecs int) {
+	// In its own goroutine, so that a long first build on an existing server
+	// does not hold up the sweep below. The sweep is correct without the index.
+	st.t.Go(func() error {
+		st.ensureTombstoneIndex()
+		return nil
+	})
 	st.t.Go(func() error {
 		interval := time.Second * time.Duration(intervalSecs)
 		timer := time.NewTimer(time.Second * time.Duration(startupDelaySecs))

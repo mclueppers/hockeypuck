@@ -711,3 +711,62 @@ func (s *TS) TestSweepLeavesABlockThatChangedUnderIt(c *gc.C) {
 	c.Check(present, gc.Equals, true)
 	c.Check(isTombstone, gc.Equals, true)
 }
+
+// TestEnsureTombstoneIndexIsIdempotent: the sweep's index is built outside the
+// transaction the other indexes share, and CONCURRENTLY, so that upgrading an
+// existing keyserver does not stall behind a scan of every row of keys. It runs
+// on every start, so it has to be a no-op once the index is there - and it has
+// to replace one an interrupted build left invalid, which IF NOT EXISTS on its
+// own would keep.
+func (s *TS) TestEnsureTombstoneIndexIsIdempotent(c *gc.C) {
+	exists, _, err := s.storage.tombstoneIndexState()
+	c.Assert(err, gc.IsNil)
+	c.Assert(exists, gc.Equals, false,
+		gc.Commentf("the index must not be created with the others, or upgrades stall"))
+
+	s.storage.ensureTombstoneIndex()
+	exists, valid, err := s.storage.tombstoneIndexState()
+	c.Assert(err, gc.IsNil)
+	c.Check(exists, gc.Equals, true)
+	c.Check(valid, gc.Equals, true)
+
+	// Again, on a database that already has it.
+	s.storage.ensureTombstoneIndex()
+	exists, valid, err = s.storage.tombstoneIndexState()
+	c.Assert(err, gc.IsNil)
+	c.Check(exists, gc.Equals, true)
+	c.Check(valid, gc.Equals, true)
+
+	// And once more with the index marked invalid, as an interrupted build
+	// would leave it.
+	_, err = s.db.Exec("UPDATE pg_index SET indisvalid = false WHERE indexrelid = $1::regclass",
+		tombstoneIndexName)
+	c.Assert(err, gc.IsNil)
+	_, valid, err = s.storage.tombstoneIndexState()
+	c.Assert(err, gc.IsNil)
+	c.Assert(valid, gc.Equals, false)
+
+	s.storage.ensureTombstoneIndex()
+	exists, valid, err = s.storage.tombstoneIndexState()
+	c.Assert(err, gc.IsNil)
+	c.Check(exists, gc.Equals, true)
+	c.Check(valid, gc.Equals, true, gc.Commentf("an invalid index must be rebuilt, not kept"))
+}
+
+// TestSweepWorksWithoutTheIndex: the index is a performance aid that may still
+// be building, or may have failed to build, so the sweep must not depend on it.
+func (s *TS) TestSweepWorksWithoutTheIndex(c *gc.C) {
+	s.trustOrigin(c)
+	victim := s.victim(c)
+	_, _, err := s.storage.Insert([]*openpgp.PrimaryKey{s.block(c, victim.Fingerprint, false)})
+	c.Assert(err, gc.IsNil)
+
+	exists, _, err := s.storage.tombstoneIndexState()
+	c.Assert(err, gc.IsNil)
+	c.Assert(exists, gc.Equals, false)
+
+	s.storage.verifyBlocks()
+
+	_, present := s.storedTag(c, victim.Fingerprint)
+	c.Check(present, gc.Equals, false)
+}

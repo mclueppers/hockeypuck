@@ -231,6 +231,16 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		}
 		return records[i].MTime.Before(records[j].MTime)
 	})
+	// Everything the bookmark does hangs on records that share an mtime, and
+	// two things put them there: the query caps its result, and it orders by
+	// mtime alone, so the records sharing the last timestamp in this batch may
+	// continue past the cap into a batch this call cannot see.
+	//
+	// So the last timestamp is left for the next cycle, which will re-read that
+	// group from its start. Only when every record in the batch shares one
+	// timestamp is there nothing to defer to - see below.
+	records = records[:completeUpTo(records)]
+
 	for i, record := range records {
 		sent := false
 		// Take care, because records can contain nils. A block is skipped too:
@@ -251,11 +261,10 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		}
 		// The bookmark moves only at a change of timestamp, because the next
 		// query asks for mtime > LastSync. Advancing it within a group of
-		// records that share one - which a keydump load gives every row it
-		// writes - would exclude the rest of that group from the retry if a
-		// later one failed. The cost is re-sending the earlier keys of a group
-		// after a failure, which PKS tolerates; the alternative silently drops
-		// them.
+		// records that share one would exclude the rest of that group from the
+		// retry if a later one failed. The cost is re-sending the earlier keys
+		// of a group after a failure, which PKS tolerates; the alternative
+		// silently drops them.
 		if i+1 == len(records) || records[i+1].MTime.After(record.MTime) {
 			status.LastSync = record.MTime
 			if err := sender.storage.PKSUpdate(status); err != nil {
@@ -268,6 +277,36 @@ func (sender *Sender) SendKeys(status *storage.Status) error {
 		}
 	}
 	return nil
+}
+
+// completeUpTo returns how much of an mtime-ordered batch can be acted on
+// without risking the rest of a timestamp that continues beyond it.
+//
+// The batch is capped by the query, so its last timestamp may be truncated:
+// acting on what arrived and moving the bookmark to that timestamp would leave
+// the remainder of the group behind a mtime > LastSync test forever. Dropping
+// the last group defers it to the next cycle, which re-reads it from the start,
+// and the cycle after that gets whatever followed - so a batch spanning two or
+// more timestamps always makes progress.
+//
+// A batch that is entirely one timestamp is the exception: there is nothing to
+// defer to, and deferring it would stall the sender on that timestamp for good.
+// It is taken whole. Reaching that needs more rows sharing one microsecond than
+// the query will return, which the per-key timestamps taken during loading make
+// unlikely; the cursor would have to carry a fingerprint as well as an mtime to
+// rule it out, and that is a change to what pks_status stores.
+func completeUpTo(records []*hkpstorage.Record) int {
+	if len(records) < 2 {
+		return len(records)
+	}
+	last := records[len(records)-1].MTime
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].MTime.Before(last) {
+			return i + 1
+		}
+	}
+	// Every record shares one timestamp.
+	return len(records)
 }
 
 // Send an updated public key to a PKS server.

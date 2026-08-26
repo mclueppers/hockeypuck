@@ -104,25 +104,49 @@ func main() {
 // location, so the common case needs no flag.
 func resolveConfigFlag() {
 	f := flag.Lookup("config")
-	if f == nil || f.Value.String() != "" {
+	if f == nil {
 		return
 	}
-	for _, candidate := range []string{os.Getenv(configEnv), defaultConfigPath} {
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(candidate); err != nil {
-			continue
-		}
-		if err := f.Value.Set(candidate); err != nil {
-			fmt.Fprintf(os.Stderr, "hockeypuck-blocklist: cannot use configuration file %q: %v\n", candidate, err)
-			os.Exit(2)
-		}
+	path, err := configPath(f.Value.String(), os.Getenv(configEnv), func(candidate string) error {
+		_, statErr := os.Stat(candidate)
+		return statErr
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hockeypuck-blocklist: %v\n", err)
+		os.Exit(2)
+	}
+	if path == "" {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "hockeypuck-blocklist: no configuration file found at %s.\n"+
-		"Pass -config PATH or set %s.\n", defaultConfigPath, configEnv)
-	os.Exit(2)
+	if err := f.Value.Set(path); err != nil {
+		fmt.Fprintf(os.Stderr, "hockeypuck-blocklist: cannot use configuration file %q: %v\n", path, err)
+		os.Exit(2)
+	}
+}
+
+// configPath decides which configuration file to work through. It returns the
+// empty string when -config was given and should be left as it is.
+//
+// A set HOCKEYPUCK_CONFIG is authoritative, and unreadable is an error rather
+// than a reason to look elsewhere. Falling through to the packaged path would
+// let a typo in the variable point block, unblock or migrate at the default
+// instance - silently operating on the wrong keyserver, which for this tool
+// means blocking the wrong keys.
+func configPath(flagValue, env string, readable func(string) error) (string, error) {
+	if flagValue != "" {
+		return "", nil
+	}
+	if env != "" {
+		if err := readable(env); err != nil {
+			return "", fmt.Errorf("%s is set to %q, which cannot be read: %v", configEnv, env, err)
+		}
+		return env, nil
+	}
+	if err := readable(defaultConfigPath); err == nil {
+		return defaultConfigPath, nil
+	}
+	return "", fmt.Errorf("no configuration file found at %s; pass -config PATH or set %s",
+		defaultConfigPath, configEnv)
 }
 
 func printUsage(w *os.File) {

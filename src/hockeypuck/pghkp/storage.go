@@ -135,14 +135,15 @@ ON subkeys(vsubfp);`,
 
 	`CREATE INDEX IF NOT EXISTS userids_identity
 ON userids(identity text_pattern_ops);`,
-
-	// Blocklist tombstones are a small subset of keys, and the preening sweep
-	// pages through them in fingerprint order. A partial index keeps that from
-	// scanning the whole table once per bunch, and costs nothing on a server
-	// that holds no blocks.
-	`CREATE INDEX IF NOT EXISTS keys_tombstones
-ON keys(reverse(rfingerprint)) WHERE doc->'packet'->>'tag' = '12';`,
 }
+
+// tombstoneIndexName and tombstoneIndexSQL build the index the blocklist sweep
+// pages through. It is deliberately not in crIndexesSQL: see ensureTombstoneIndex.
+const (
+	tombstoneIndexName = "keys_tombstones"
+	tombstoneIndexSQL  = `CREATE INDEX CONCURRENTLY IF NOT EXISTS ` + tombstoneIndexName +
+		` ON keys(reverse(rfingerprint)) WHERE doc->'packet'->>'tag' = '12'`
+)
 
 // TODO: these constraint names assume ancient postgres defaults and are not stable.
 // luckily drConstraintsSQL is never used... should we remove?

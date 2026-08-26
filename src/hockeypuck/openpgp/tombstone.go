@@ -381,10 +381,14 @@ func VerifyTombstone(ts Tombstone, sigs []*Signature, trusted []*PrimaryKey) (st
 		// let a revoked, expired or encryption-only subkey of a trusted primary
 		// authorise new blocks.
 		//
-		// A creation time in the future is deliberately not rejected. It buys a
-		// forger nothing - revocation and expiry are judged against now, not
-		// against the signature's own clock - while rejecting it would refuse
-		// legitimate blocks over ordinary clock skew between operators.
+		// Note that this also refuses a signature dated in the future, because
+		// SigExpired counts that as expired. An operator whose clock runs fast
+		// therefore issues blocks their peers refuse, and that a peer which had
+		// already stored one unverified will drop at its next sweep. Nothing is
+		// lost permanently - reconciliation offers the block again once the
+		// clocks agree - but it is a reason to keep an issuing node's clock
+		// honest. Tolerating a skew window here would mean stepping outside this
+		// path, which is where all the other validity checks live.
 		signer, err := gocrypto.CheckDetachedSignature(keyring,
 			bytes.NewReader(message), bytes.NewReader(sig.Data), nil)
 		if err != nil {

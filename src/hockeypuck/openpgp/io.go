@@ -337,7 +337,15 @@ PARSE:
 	for op, err = or.Next(); err == nil; op, err = or.Next() {
 		packetLen := len(op.Contents)
 		max := r.maxPacketLen
-		if op.Tag == 2 {
+		switch {
+		case op.Tag == 2:
+			max = r.maxSigPacketLen
+		case op.Tag == 12 && isTombstonePacket(op):
+			// A tombstone is bounded like a signature rather than like an
+			// annotation. Its size is dominated by the origin signature carried
+			// inside it, so holding it to the ordinary packet limit would drop
+			// blocks signed with a post-quantum algorithm - the very packets the
+			// larger signature limit exists for - before they were ever parsed.
 			max = r.maxSigPacketLen
 		}
 		if max > 0 && packetLen > max {

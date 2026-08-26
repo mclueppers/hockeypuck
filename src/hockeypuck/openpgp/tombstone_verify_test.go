@@ -255,3 +255,48 @@ func (s *TombstoneVerifySuite) TestUnreadableTrustedKeyIsUnverifiable(c *gc.C) {
 	c.Check(errors.Is(err, ErrTombstoneUnverifiable), gc.Equals, true,
 		gc.Commentf("expected an unverifiable verdict, got %v", err))
 }
+
+// TestLargeTombstoneSurvivesTheReader: the reader checks a packet's size before
+// it knows what the packet is, and a tombstone is a trust packet whose size is
+// dominated by the signature inside it. Holding it to the ordinary packet limit
+// rather than the signature limit would silently drop exactly the blocks the
+// larger limit exists for - those signed with a post-quantum algorithm - before
+// anything had a chance to parse them.
+func (s *TombstoneVerifySuite) TestLargeTombstoneSurvivesTheReader(c *gc.C) {
+	const ordinaryLimit, signatureLimit = 8192, 65536
+
+	entity, pub := s.originKey(c)
+	ts := Tombstone{Fingerprint: tsFpA, Origin: "pgpkeys.eu", Reason: "abuse"}
+	// Stand in for one big signature with several ordinary ones, which is the
+	// only way to build an oversized tombstone without a post-quantum key.
+	sigs := []*Signature{}
+	var tombstone *PrimaryKey
+	for len(sigs) < 64 {
+		sigs = append(sigs, s.sign(c, entity, ts.SigningMessage()))
+		built, err := NewTombstone(ts, sigs...)
+		c.Assert(err, gc.IsNil)
+		tombstone = built
+		if tombstone.Length > ordinaryLimit {
+			break
+		}
+	}
+	c.Assert(tombstone.Length, gc.Not(gc.Equals), 0)
+	c.Assert(tombstone.Length > ordinaryLimit, gc.Equals, true,
+		gc.Commentf("wanted a tombstone over %d bytes, got %d", ordinaryLimit, tombstone.Length))
+	c.Assert(tombstone.Length < signatureLimit, gc.Equals, true)
+
+	var buf bytes.Buffer
+	c.Assert(WritePackets(&buf, tombstone), gc.IsNil)
+	received, err := NewKeyReader(bytes.NewReader(buf.Bytes()),
+		MaxPacketLen(ordinaryLimit), MaxSigPacketLen(signatureLimit)).Read()
+	c.Assert(err, gc.IsNil)
+	c.Assert(received, gc.HasLen, 1,
+		gc.Commentf("a %d byte tombstone was dropped by the ordinary packet limit", tombstone.Length))
+
+	gotTS, gotSigs, err := TombstoneOf(received[0])
+	c.Assert(err, gc.IsNil)
+	c.Check(gotTS.Fingerprint, gc.Equals, tsFpA)
+	fp, err := VerifyTombstone(*gotTS, gotSigs, []*PrimaryKey{pub})
+	c.Assert(err, gc.IsNil)
+	c.Check(fp, gc.Equals, pub.Fingerprint)
+}
